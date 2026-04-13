@@ -1,6 +1,6 @@
 # init-vpn-node
 
-🚀 Production-like bootstrap для VPN-ноды на Debian/Ubuntu.
+🚀 Первичная конфигурация для VPN-ноды на Debian/Ubuntu.
 
 Скрипт поднимает базовую конфигурацию сервера, настраивает SSH, ставит Docker, Zsh-окружение, Speedtest CLI, firewall и отдельный механизм ежедневного обновления blocklist через `ipset` + `systemd timer`.
 
