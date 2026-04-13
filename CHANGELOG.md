@@ -14,6 +14,7 @@
 - валидация SSH port и безопасное обновление `/etc/ssh/sshd_config` с проверкой через `sshd -t`
 - отдельный updater `scripts/update-traffic-guard.sh`
 - атомарное обновление blocklist через временный `ipset` и `ipset swap`
+- защита updater от параллельных запусков через `flock` и уникальный временный `ipset`
 - логирование обновления Traffic Guard в `/var/log/traffic-guard-update.log`
 - `systemd service` и `systemd timer` для ежедневного обновления blocklist
 - идемпотентное применение `iptables`-правил

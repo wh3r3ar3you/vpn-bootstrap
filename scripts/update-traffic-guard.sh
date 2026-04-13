@@ -5,12 +5,15 @@ set -euo pipefail
 readonly LOG_FILE="/var/log/traffic-guard-update.log"
 readonly BLOCKLIST_DIR="/opt/blocklists"
 readonly ACTIVE_SET="blacklist"
-readonly TEMP_SET="blacklist_new"
+readonly TEMP_SET_PREFIX="blacklist_new"
+readonly LOCK_FILE="/run/lock/traffic-guard-update.lock"
 readonly IPTABLES_MATCH_RULE=(-m set --match-set "${ACTIVE_SET}" src -j DROP)
 readonly SOURCES=(
   "https://raw.githubusercontent.com/shadow-netlab/traffic-guard-lists/main/government_networks.list"
   "https://raw.githubusercontent.com/shadow-netlab/traffic-guard-lists/main/antiscanner.list"
 )
+
+TEMP_SET=""
 
 log() {
   local message="$*"
@@ -33,7 +36,22 @@ require_command() {
 }
 
 cleanup() {
-  ipset destroy "${TEMP_SET}" >/dev/null 2>&1 || true
+  if [[ -n "${TEMP_SET}" ]]; then
+    ipset destroy "${TEMP_SET}" >/dev/null 2>&1 || true
+  fi
+}
+
+acquire_lock() {
+  install -d -m 755 /run/lock
+  exec 9>"${LOCK_FILE}"
+  if ! flock -n 9; then
+    log "Another Traffic Guard update is already running, exiting"
+    exit 0
+  fi
+}
+
+init_temp_set_name() {
+  TEMP_SET="${TEMP_SET_PREFIX}_$$"
 }
 
 validate_entry() {
@@ -153,10 +171,13 @@ main() {
   require_command awk
   require_command sort
   require_command tee
+  require_command flock
 
   touch "${LOG_FILE}"
   chmod 600 "${LOG_FILE}"
 
+  acquire_lock
+  init_temp_set_name
   ensure_active_set
   ipset destroy "${TEMP_SET}" >/dev/null 2>&1 || true
   ipset create "${TEMP_SET}" hash:net family inet maxelem 200000
