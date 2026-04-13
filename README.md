@@ -28,6 +28,7 @@
 ## 📁 Структура репозитория
 
 - `bootstrap.sh` — основной bootstrap-скрипт
+- `install.sh` — one-line installer для быстрого запуска с GitHub
 - `scripts/update-traffic-guard.sh` — updater blocklist для ручного и автоматического запуска
 - `systemd/traffic-guard-update.service` — `systemd service` для обновления
 - `systemd/traffic-guard-update.timer` — ежедневный `systemd timer`
@@ -38,6 +39,20 @@
 - `.github/workflows/shellcheck.yml` — CI-проверка shell-скриптов
 
 ## ▶️ Как запустить
+
+### Вариант 1: установка одной командой
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/wh3r3ar3you/vpn-bootstrap/main/install.sh)
+```
+
+Что делает эта команда:
+
+- скачивает `install.sh` из GitHub
+- клонирует репозиторий во временный каталог
+- запускает `bootstrap.sh`
+
+### Вариант 2: запуск из клонированного репозитория
 
 ```bash
 chmod +x bootstrap.sh
@@ -51,6 +66,21 @@ chmod +x bootstrap.sh
 - публичный SSH key для добавления в `/root/.ssh/authorized_keys`
 
 Если SSH port оставить пустым, будет использован порт `22`.
+
+## ⚡ Быстрый сценарий установки
+
+Для fresh server сценария можно выполнить одну команду:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/wh3r3ar3you/vpn-bootstrap/main/install.sh)
+```
+
+После этого installer:
+
+1. скачает install-скрипт
+2. клонирует репозиторий `wh3r3ar3you/vpn-bootstrap`
+3. запустит `bootstrap.sh`
+4. попросит ввести hostname, SSH port и публичный SSH key
 
 ## 🛠 Что меняет bootstrap
 

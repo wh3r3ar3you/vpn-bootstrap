@@ -19,7 +19,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y shellcheck
 
       - name: Bash syntax check
-        run: bash -n bootstrap.sh scripts/update-traffic-guard.sh
+        run: bash -n bootstrap.sh install.sh scripts/update-traffic-guard.sh
 
       - name: Shellcheck
-        run: shellcheck bootstrap.sh scripts/update-traffic-guard.sh
+        run: shellcheck bootstrap.sh install.sh scripts/update-traffic-guard.sh

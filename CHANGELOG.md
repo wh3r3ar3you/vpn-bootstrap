@@ -9,6 +9,7 @@
 ### Added
 
 - интерактивный `bootstrap.sh` с вводом hostname, SSH port и публичного SSH key
+- `install.sh` для one-line установки напрямую с GitHub
 - безопасная настройка `authorized_keys` без перезаписи существующих ключей
 - валидация SSH port и безопасное обновление `/etc/ssh/sshd_config` с проверкой через `sshd -t`
 - отдельный updater `scripts/update-traffic-guard.sh`
