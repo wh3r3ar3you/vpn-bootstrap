@@ -9,8 +9,8 @@ readonly TEMP_SET_PREFIX="blacklist_new"
 readonly LOCK_FILE="/run/lock/traffic-guard-update.lock"
 readonly IPTABLES_MATCH_RULE=(-m set --match-set "${ACTIVE_SET}" src -j DROP)
 readonly SOURCES=(
-  "https://raw.githubusercontent.com/shadow-netlab/traffic-guard-lists/main/government_networks.list"
-  "https://raw.githubusercontent.com/shadow-netlab/traffic-guard-lists/main/antiscanner.list"
+  "https://raw.githubusercontent.com/shadow-netlab/traffic-guard-lists/refs/heads/main/public/government_networks.list"
+  "https://raw.githubusercontent.com/shadow-netlab/traffic-guard-lists/refs/heads/main/public/antiscanner.list"
 )
 
 TEMP_SET=""
