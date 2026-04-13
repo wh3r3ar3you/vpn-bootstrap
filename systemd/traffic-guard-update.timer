@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Traffic Guard updater daily
+
+[Timer]
+OnBootSec=10m
+OnUnitActiveSec=1d
+Persistent=true
+Unit=traffic-guard-update.service
+
+[Install]
+WantedBy=timers.target
