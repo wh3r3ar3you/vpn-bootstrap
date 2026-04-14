@@ -21,3 +21,8 @@
 - `README.md`, `.gitignore`, `.editorconfig`, `.gitattributes`
 - GitHub Actions workflow для `bash -n` и `shellcheck`
 - `LICENSE`
+
+### Changed
+
+- `install.sh` больше не зависит от `git`: installer проверяет базовые утилиты, ставит недостающее и скачивает архив репозитория
+- `bootstrap.sh` теперь проверяет apt-пакеты и ставит только отсутствующие, включая `openssh-server` на пустых образах

@@ -9,6 +9,7 @@
 Проект устанавливает и настраивает:
 
 - обновление системы и базовые пакеты для администрирования
+- проверку базовых зависимостей и установку недостающих компонентов перед bootstrap
 - Docker через официальный install script
 - Oh My Zsh, Powerlevel10k и плагины для `root`
 - Speedtest CLI
@@ -49,7 +50,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/wh3r3ar3you/vpn-bootstrap/ma
 Что делает эта команда:
 
 - скачивает `install.sh` из GitHub
-- клонирует репозиторий во временный каталог
+- при необходимости ставит минимальные зависимости для запуска installer
+- скачивает архив репозитория во временный каталог
 - запускает `bootstrap.sh`
 
 ### Вариант 2: запуск из клонированного репозитория
@@ -91,10 +93,11 @@ bash <(curl -fsSL https://raw.githubusercontent.com/wh3r3ar3you/vpn-bootstrap/ma
 - пишет `/etc/sysctl.d/99-vpn-tuning.conf`
 - выполняет `sysctl --system`
 - выполняет `apt-get update` и `apt-get -y upgrade`
-- устанавливает пакеты через `apt-get`
+- проверяет apt-пакеты и устанавливает только отсутствующие через `apt-get`
 - устанавливает и включает Docker
 - настраивает Zsh-окружение для `root`
 - устанавливает Speedtest CLI
+- при необходимости ставит `openssh-server` до изменения `sshd_config`
 - создаёт `/root/.ssh` и `/root/.ssh/authorized_keys` с корректными правами
 - добавляет переданный публичный SSH key без затирания уже существующих ключей
 - обновляет `/etc/ssh/sshd_config`, валидирует его через `sshd -t` и только потом перезапускает SSH

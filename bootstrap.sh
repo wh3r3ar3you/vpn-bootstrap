@@ -34,6 +34,30 @@ require_command() {
   fi
 }
 
+is_apt_package_installed() {
+  local package="$1"
+  dpkg-query -W -f='${Status}' "${package}" 2>/dev/null | grep -Fqx 'install ok installed'
+}
+
+install_apt_packages() {
+  local package missing_packages=()
+
+  for package in "$@"; do
+    if ! is_apt_package_installed "${package}"; then
+      missing_packages+=("${package}")
+    fi
+  done
+
+  if [[ ${#missing_packages[@]} -eq 0 ]]; then
+    log "Required apt packages are already installed"
+    return
+  fi
+
+  log "Installing missing apt packages: ${missing_packages[*]}"
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get install -y "${missing_packages[@]}"
+}
+
 detect_ssh_service() {
   if systemctl cat ssh.service >/dev/null 2>&1; then
     SSH_SERVICE_NAME="ssh"
@@ -156,9 +180,7 @@ update_system() {
 }
 
 install_packages() {
-  log "Installing required packages"
-  export DEBIAN_FRONTEND=noninteractive
-  apt-get install -y \
+  install_apt_packages \
     tcpdump \
     nload \
     iftop \
@@ -173,6 +195,7 @@ install_packages() {
     ca-certificates \
     gnupg \
     lsb-release \
+    openssh-server \
     ipset \
     iptables \
     iptables-persistent
@@ -375,6 +398,7 @@ main() {
   require_command hostnamectl
   require_command systemctl
   require_command apt-get
+  require_command dpkg-query
 
   printf '===== VPN NODE BOOTSTRAP =====\n'
 
