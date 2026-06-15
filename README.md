@@ -68,6 +68,7 @@ chmod +x bootstrap.sh
 - SSH port
 - публичный SSH key для добавления в `/root/.ssh/authorized_keys`
 - устанавливать ли XanMod LTS kernel
+- если XanMod выбран, делать ли автоматический reboot после успешного bootstrap
 
 Если SSH port оставить пустым, будет использован порт `22`.
 
@@ -97,6 +98,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/wh3r3ar3you/vpn-bootstrap/ma
 - выполняет `apt-get update` и `apt-get -y upgrade`
 - проверяет apt-пакеты и устанавливает только отсутствующие через `apt-get`
 - опционально добавляет официальный XanMod APT repo и ставит `linux-xanmod-lts-x64v1/v2/v3` по уровню CPU
+- если XanMod выбран и пользователь подтвердил auto reboot, перезагружает сервер после успешного завершения
 - устанавливает и включает Docker
 - настраивает Zsh-окружение для `root`
 - устанавливает Speedtest CLI
@@ -187,6 +189,8 @@ Bootstrap записывает два файла:
 ## 🧬 XanMod LTS kernel
 
 Bootstrap может опционально поставить XanMod LTS kernel. По умолчанию ответ `no`, потому что это смена ядра и она вступает в силу только после reboot.
+
+Если XanMod выбран, bootstrap отдельно спросит, делать ли автоматический reboot после успешной установки и настройки сервера. По умолчанию auto reboot выключен.
 
 Если выбрать `yes`, скрипт:
 

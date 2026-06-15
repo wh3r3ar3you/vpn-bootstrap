@@ -20,6 +20,7 @@ HOSTNAME_VALUE=""
 SSH_PORT_VALUE="${DEFAULT_SSH_PORT}"
 SSH_KEY_VALUE=""
 INSTALL_XANMOD_LTS=0
+AUTO_REBOOT_AFTER_BOOTSTRAP=0
 SSH_SERVICE_NAME=""
 
 log() {
@@ -151,6 +152,33 @@ ask_xanmod_lts() {
         ;;
       n|N|no|NO)
         INSTALL_XANMOD_LTS=0
+        return
+        ;;
+    esac
+
+    printf 'Enter y or n.\n' >&2
+  done
+}
+
+ask_xanmod_reboot() {
+  local input
+
+  if [[ "${INSTALL_XANMOD_LTS}" -ne 1 ]]; then
+    AUTO_REBOOT_AFTER_BOOTSTRAP=0
+    return
+  fi
+
+  while true; do
+    read -r -p "Reboot automatically after successful bootstrap to activate XanMod? [y/N]: " input
+    input="${input:-n}"
+
+    case "${input}" in
+      y|Y|yes|YES)
+        AUTO_REBOOT_AFTER_BOOTSTRAP=1
+        return
+        ;;
+      n|N|no|NO)
+        AUTO_REBOOT_AFTER_BOOTSTRAP=0
         return
         ;;
     esac
@@ -595,8 +623,21 @@ print_summary() {
   printf 'ssh -p %s root@%s\n\n' "${SSH_PORT_VALUE}" "${HOSTNAME_VALUE}"
   printf 'Traffic Guard timer status:\n%s\n\n' "${timer_status}"
   printf 'Manual blocklist update:\n%s\n\n' "${UPDATE_SCRIPT_TARGET}"
+  if [[ "${INSTALL_XANMOD_LTS}" -eq 1 ]]; then
+    printf 'XanMod LTS was requested. Reboot is required to activate the new kernel.\n'
+    printf 'Automatic reboot: %s\n\n' "$([[ "${AUTO_REBOOT_AFTER_BOOTSTRAP}" -eq 1 ]] && printf 'yes' || printf 'no')"
+  fi
   printf 'Then run:\n'
   printf 'p10k configure\n'
+}
+
+maybe_reboot() {
+  if [[ "${AUTO_REBOOT_AFTER_BOOTSTRAP}" -ne 1 ]]; then
+    return
+  fi
+
+  log "Rebooting to activate XanMod LTS kernel"
+  systemctl reboot
 }
 
 main() {
@@ -612,6 +653,7 @@ main() {
   ask_ssh_port
   ask_ssh_key
   ask_xanmod_lts
+  ask_xanmod_reboot
 
   configure_hostname
   configure_sysctl
@@ -630,6 +672,7 @@ main() {
   install_traffic_guard_updater
   apply_firewall_rules
   print_summary
+  maybe_reboot
 }
 
 main "$@"

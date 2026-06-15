@@ -33,3 +33,4 @@
 - updater blocklist использует retry/timeout для загрузок и bulk-загрузку через `ipset restore`
 - `traffic-guard-update.service` ограничен capability-набором и write paths через systemd hardening
 - добавлена опциональная установка XanMod LTS kernel с автоопределением `x86-64-v1/v2/v3`
+- при выборе XanMod LTS bootstrap теперь отдельно спрашивает про автоматический reboot после успешной установки
