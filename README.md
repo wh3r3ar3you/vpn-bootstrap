@@ -197,8 +197,6 @@ VPN defense profile выключен по умолчанию и включает
 - пропускает ICMP echo-request до `30/sec` burst `60`, а лишнее режет
 - сохраняет firewall через `netfilter-persistent save`
 
-Профиль не ставит CrowdSec, fail2ban и REALITY/Xray guard.
-
 ## 🧬 XanMod LTS kernel
 
 Bootstrap может опционально поставить XanMod LTS kernel. По умолчанию ответ `no`, потому что это смена ядра и она вступает в силу только после reboot.
