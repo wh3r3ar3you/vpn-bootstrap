@@ -15,7 +15,7 @@
 - Oh My Zsh, Powerlevel10k и плагины для `root`
 - Speedtest CLI
 - sysctl-настройки для VPN-сценария
-- опциональный VPN defense profile с auto-tuned conntrack/backlog и `iptables` rate limits
+- опциональный VPN defense profile с auto-tuned conntrack/backlog, RPS/RFS и `iptables` rate limits
 - интерактивную настройку hostname, SSH port и `root` SSH key
 - Traffic Guard blacklist на базе `ipset` + `iptables`
 - ежедневное безопасное обновление blocklist через `systemd timer`
@@ -74,21 +74,6 @@ chmod +x bootstrap.sh
 
 Если SSH port оставить пустым, будет использован порт `22`.
 
-## ⚡ Быстрый сценарий установки
-
-Для нового сервера, можно выполнить одну команду:
-
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/wh3r3ar3you/vpn-bootstrap/main/install.sh)
-```
-
-После этого installer:
-
-1. скачает install-скрипт
-2. клонирует репозиторий `wh3r3ar3you/vpn-bootstrap`
-3. запустит `bootstrap.sh`
-4. попросит ввести hostname, SSH port и публичный SSH key
-
 ## 🛠 Что меняет bootstrap
 
 `bootstrap.sh`:
@@ -99,7 +84,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/wh3r3ar3you/vpn-bootstrap/ma
 - применяет sysctl через `sysctl -e -p`, чтобы неизвестные ключи старого ядра не ломали bootstrap
 - выполняет `apt-get update` и `apt-get -y upgrade`
 - проверяет apt-пакеты и устанавливает только отсутствующие через `apt-get`
-- опционально пишет `/etc/sysctl.d/99-vpn-defense.conf` и `/etc/modprobe.d/vpn-defense-conntrack.conf`
+- опционально пишет `/etc/sysctl.d/99-vpn-defense.conf`, `/etc/sysctl.d/99-vpn-rps.conf` и `/etc/modprobe.d/vpn-defense-conntrack.conf`
+- опционально включает RPS/RFS на RX-очередях основного сетевого интерфейса и ставит `/usr/local/sbin/apply-vpn-rps.sh` + `vpn-rps.service` для применения после reboot
 - опционально добавляет официальный XanMod APT repo и ставит `linux-xanmod-lts-x64v1/v2/v3` по уровню CPU
 - если XanMod выбран и пользователь подтвердил auto reboot, перезагружает сервер после успешного завершения
 - устанавливает и включает Docker
@@ -197,10 +183,13 @@ VPN defense profile выключен по умолчанию и включает
 Если выбрать `yes`, bootstrap:
 
 - считает RAM и CPU count
-- подбирает `nf_conntrack_max`, conntrack hash buckets, `somaxconn`, `tcp_max_syn_backlog`, `netdev_max_backlog`
+- подбирает `nf_conntrack_max`, conntrack hash buckets, `somaxconn`, `tcp_max_syn_backlog`, `netdev_max_backlog` и RPS/RFS flow table
 - пишет `/etc/sysctl.d/99-vpn-defense.conf`
+- пишет `/etc/sysctl.d/99-vpn-rps.conf`
 - пишет `/etc/modprobe.d/vpn-defense-conntrack.conf` для conntrack hashsize после reboot
 - применяет доступные sysctl сразу через `sysctl -e -p`
+- находит основной сетевой интерфейс и пишет CPU-mask во все `/sys/class/net/<iface>/queues/rx-*/rps_cpus`
+- пишет `rps_flow_cnt` для RX-очередей и включает `/usr/local/sbin/apply-vpn-rps.sh` через `vpn-rps.service`, чтобы настройки вернулись после reboot
 - создаёт или пересоздаёт chains `VPN_SYN_LIM` и `VPN_UDP_AMP`
 - добавляет в `INPUT` только правила с comment `vpn-defense`
 - ограничивает TCP SYN на `80,443,8443` через `hashlimit` per source IP

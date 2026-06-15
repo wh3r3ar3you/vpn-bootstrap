@@ -22,6 +22,7 @@
 - GitHub Actions workflow для `bash -n` и `shellcheck`
 - `LICENSE`
 - опциональный VPN defense profile с auto-tuned conntrack/backlog sysctl и `iptables` hashlimit rules
+- RPS/RFS tuning по всем CPU для RX-очередей основного интерфейса в VPN defense profile
 
 ### Changed
 
@@ -35,3 +36,4 @@
 - `traffic-guard-update.service` ограничен capability-набором и write paths через systemd hardening
 - добавлена опциональная установка XanMod LTS kernel с автоопределением `x86-64-v1/v2/v3`
 - при выборе XanMod LTS bootstrap теперь отдельно спрашивает про автоматический reboot после успешной установки
+- README больше не дублирует отдельный быстрый сценарий установки, оставлена одна команда запуска
