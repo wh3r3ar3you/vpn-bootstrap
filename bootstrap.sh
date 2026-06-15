@@ -11,6 +11,8 @@ readonly SSHD_CONFIG="/etc/ssh/sshd_config"
 readonly SSHD_BACKUP="/etc/ssh/sshd_config.bak.bootstrap"
 readonly SYSCTL_IPV6_FILE="/etc/sysctl.d/99-disable-ipv6.conf"
 readonly SYSCTL_TUNING_FILE="/etc/sysctl.d/99-vpn-tuning.conf"
+readonly SYSCTL_DEFENSE_FILE="/etc/sysctl.d/99-vpn-defense.conf"
+readonly CONNTRACK_MODPROBE_FILE="/etc/modprobe.d/vpn-defense-conntrack.conf"
 readonly BLOCKLIST_SET="blacklist"
 readonly IPSET_MAXELEM=500000
 readonly XANMOD_KEYRING="/etc/apt/keyrings/xanmod-archive-keyring.gpg"
@@ -19,9 +21,17 @@ readonly XANMOD_SOURCE_LIST="/etc/apt/sources.list.d/xanmod-release.list"
 HOSTNAME_VALUE=""
 SSH_PORT_VALUE="${DEFAULT_SSH_PORT}"
 SSH_KEY_VALUE=""
+INSTALL_VPN_DEFENSE=0
 INSTALL_XANMOD_LTS=0
 AUTO_REBOOT_AFTER_BOOTSTRAP=0
 SSH_SERVICE_NAME=""
+DEFENSE_CT_MAX=1048576
+DEFENSE_CT_BUCKETS=524288
+DEFENSE_SOMAXCONN=8192
+DEFENSE_SYN_BACKLOG=8192
+DEFENSE_NETDEV_BACKLOG=250000
+DEFENSE_SYN_RATE=80
+DEFENSE_SYN_BURST=160
 
 log() {
   printf '[%s] %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*"
@@ -135,6 +145,28 @@ ask_ssh_key() {
     fi
 
     printf 'Invalid public SSH key. Paste a single OpenSSH public key line.\n' >&2
+  done
+}
+
+ask_vpn_defense() {
+  local input
+
+  while true; do
+    read -r -p "Install VPN defense profile (auto-tuned conntrack/backlog + iptables rate limits)? [y/N]: " input
+    input="${input:-n}"
+
+    case "${input}" in
+      y|Y|yes|YES)
+        INSTALL_VPN_DEFENSE=1
+        return
+        ;;
+      n|N|no|NO)
+        INSTALL_VPN_DEFENSE=0
+        return
+        ;;
+    esac
+
+    printf 'Enter y or n.\n' >&2
   done
 }
 
@@ -259,6 +291,104 @@ EOF
   sysctl -e -p "${SYSCTL_TUNING_FILE}" >/dev/null
 }
 
+calculate_vpn_defense_tuning() {
+  local nproc ram_kb ram_gb
+
+  nproc="$(nproc)"
+  ram_kb="$(awk '/MemTotal/ { print $2 }' /proc/meminfo)"
+  ram_gb=$(( ram_kb / 1024 / 1024 ))
+
+  if (( ram_gb >= 64 )); then
+    DEFENSE_CT_MAX=16777216
+  elif (( ram_gb >= 32 )); then
+    DEFENSE_CT_MAX=8388608
+  elif (( ram_gb >= 16 )); then
+    DEFENSE_CT_MAX=4194304
+  elif (( ram_gb >= 8 )); then
+    DEFENSE_CT_MAX=2097152
+  elif (( ram_gb >= 4 )); then
+    DEFENSE_CT_MAX=1048576
+  elif (( ram_gb >= 2 )); then
+    DEFENSE_CT_MAX=524288
+  else
+    DEFENSE_CT_MAX=262144
+  fi
+  DEFENSE_CT_BUCKETS=$(( DEFENSE_CT_MAX / 2 ))
+
+  if (( nproc >= 32 )); then
+    DEFENSE_SOMAXCONN=524288
+    DEFENSE_SYN_BACKLOG=524288
+    DEFENSE_NETDEV_BACKLOG=1000000
+    DEFENSE_SYN_RATE=300
+    DEFENSE_SYN_BURST=600
+  elif (( nproc >= 16 )); then
+    DEFENSE_SOMAXCONN=262144
+    DEFENSE_SYN_BACKLOG=262144
+    DEFENSE_NETDEV_BACKLOG=500000
+    DEFENSE_SYN_RATE=200
+    DEFENSE_SYN_BURST=400
+  elif (( nproc >= 8 )); then
+    DEFENSE_SOMAXCONN=131072
+    DEFENSE_SYN_BACKLOG=131072
+    DEFENSE_NETDEV_BACKLOG=300000
+    DEFENSE_SYN_RATE=120
+    DEFENSE_SYN_BURST=240
+  elif (( nproc >= 4 )); then
+    DEFENSE_SOMAXCONN=65535
+    DEFENSE_SYN_BACKLOG=65535
+    DEFENSE_NETDEV_BACKLOG=250000
+    DEFENSE_SYN_RATE=80
+    DEFENSE_SYN_BURST=160
+  elif (( nproc >= 2 )); then
+    DEFENSE_SOMAXCONN=32768
+    DEFENSE_SYN_BACKLOG=32768
+    DEFENSE_NETDEV_BACKLOG=100000
+    DEFENSE_SYN_RATE=60
+    DEFENSE_SYN_BURST=120
+  else
+    DEFENSE_SOMAXCONN=16384
+    DEFENSE_SYN_BACKLOG=16384
+    DEFENSE_NETDEV_BACKLOG=50000
+    DEFENSE_SYN_RATE=60
+    DEFENSE_SYN_BURST=120
+  fi
+
+  log "VPN defense auto-tune: nproc=${nproc} ram=${ram_gb}G ct_max=${DEFENSE_CT_MAX} buckets=${DEFENSE_CT_BUCKETS} somaxconn=${DEFENSE_SOMAXCONN} syn_backlog=${DEFENSE_SYN_BACKLOG} netdev_backlog=${DEFENSE_NETDEV_BACKLOG}"
+}
+
+apply_conntrack_hashsize() {
+  modprobe nf_conntrack 2>/dev/null || true
+  install -d -m 755 "$(dirname "${CONNTRACK_MODPROBE_FILE}")"
+  printf 'options nf_conntrack hashsize=%s\n' "${DEFENSE_CT_BUCKETS}" > "${CONNTRACK_MODPROBE_FILE}"
+
+  if [[ -w /sys/module/nf_conntrack/parameters/hashsize ]]; then
+    printf '%s\n' "${DEFENSE_CT_BUCKETS}" > /sys/module/nf_conntrack/parameters/hashsize || true
+  fi
+}
+
+configure_vpn_defense_sysctl() {
+  if [[ "${INSTALL_VPN_DEFENSE}" -ne 1 ]]; then
+    return
+  fi
+
+  log "Configuring VPN defense sysctl"
+  calculate_vpn_defense_tuning
+  apply_conntrack_hashsize
+
+  cat <<EOF > "${SYSCTL_DEFENSE_FILE}"
+# Auto-tuned VPN defense profile.
+net.netfilter.nf_conntrack_max=${DEFENSE_CT_MAX}
+net.ipv4.tcp_syncookies=1
+net.core.somaxconn=${DEFENSE_SOMAXCONN}
+net.ipv4.tcp_max_syn_backlog=${DEFENSE_SYN_BACKLOG}
+net.core.netdev_max_backlog=${DEFENSE_NETDEV_BACKLOG}
+net.ipv4.tcp_synack_retries=2
+net.ipv4.tcp_fin_timeout=15
+EOF
+
+  sysctl -e -p "${SYSCTL_DEFENSE_FILE}" >/dev/null
+}
+
 update_system() {
   log "Updating system packages"
   export DEBIAN_FRONTEND=noninteractive
@@ -281,6 +411,7 @@ install_packages() {
     fonts-powerline \
     ca-certificates \
     gnupg \
+    kmod \
     lsb-release \
     openssh-server \
     openssh-client \
@@ -593,6 +724,85 @@ ensure_docker_user_rule() {
   fi
 }
 
+flush_iptables_comment_rules() {
+  local table="$1"
+  local chain="$2"
+  local comment="$3"
+  local prefix="-A ${chain} "
+  local rule_spec
+
+  while read -r rule_spec; do
+    [[ -n "${rule_spec}" ]] || continue
+    rule_spec="${rule_spec#"${prefix}"}"
+
+    if [[ -n "${table}" ]]; then
+      # shellcheck disable=SC2086
+      iptables -t "${table}" -D "${chain}" ${rule_spec} 2>/dev/null || true
+    else
+      # shellcheck disable=SC2086
+      iptables -D "${chain}" ${rule_spec} 2>/dev/null || true
+    fi
+  done < <(
+    if [[ -n "${table}" ]]; then
+      iptables -t "${table}" -S "${chain}" 2>/dev/null
+    else
+      iptables -S "${chain}" 2>/dev/null
+    fi | grep -F -- "--comment \"${comment}\"" || true
+  )
+}
+
+ensure_iptables_chain() {
+  local chain="$1"
+
+  if iptables -nL "${chain}" >/dev/null 2>&1; then
+    iptables -F "${chain}"
+  else
+    iptables -N "${chain}"
+  fi
+}
+
+insert_vpn_defense_input_rules() {
+  local rules=(
+    "-m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT -m comment --comment vpn-defense"
+    "-i lo -j ACCEPT -m comment --comment vpn-defense"
+    "-p tcp -m tcp --dport ${SSH_PORT_VALUE} -j ACCEPT -m comment --comment vpn-defense"
+    "-m conntrack --ctstate INVALID -j DROP -m comment --comment vpn-defense"
+    "-p tcp -m tcp --syn -m multiport --dports 80,443,8443 -j VPN_SYN_LIM -m comment --comment vpn-defense"
+    "-p udp -m multiport --sports 19,53,123,389,1900,11211,5060,1194 -j VPN_UDP_AMP -m comment --comment vpn-defense"
+    "-p icmp --icmp-type echo-request -m limit --limit 30/sec --limit-burst 60 -j ACCEPT -m comment --comment vpn-defense"
+    "-p icmp --icmp-type echo-request -j DROP -m comment --comment vpn-defense"
+  )
+  local i
+
+  for (( i = ${#rules[@]} - 1; i >= 0; i-- )); do
+    # shellcheck disable=SC2086
+    iptables -I INPUT 1 ${rules[i]}
+  done
+}
+
+configure_vpn_defense_firewall() {
+  if [[ "${INSTALL_VPN_DEFENSE}" -ne 1 ]]; then
+    return
+  fi
+
+  log "Applying VPN defense firewall rules"
+  ensure_iptables_chain VPN_SYN_LIM
+  ensure_iptables_chain VPN_UDP_AMP
+
+  iptables -A VPN_SYN_LIM -m hashlimit --hashlimit-above "${DEFENSE_SYN_RATE}/sec" --hashlimit-burst "${DEFENSE_SYN_BURST}" \
+    --hashlimit-mode srcip --hashlimit-name vpn_syn --hashlimit-htable-expire 30000 -j DROP
+  iptables -A VPN_SYN_LIM -j RETURN
+
+  iptables -A VPN_UDP_AMP -m hashlimit --hashlimit-above 100/sec --hashlimit-burst 200 \
+    --hashlimit-mode srcip --hashlimit-name vpn_udp_amp --hashlimit-htable-expire 30000 -j DROP
+  iptables -A VPN_UDP_AMP -j RETURN
+
+  flush_iptables_comment_rules "" INPUT vpn-defense
+  insert_vpn_defense_input_rules
+
+  netfilter-persistent save >/dev/null
+}
+
 apply_firewall_rules() {
   log "Applying firewall rules"
 
@@ -623,6 +833,15 @@ print_summary() {
   printf 'ssh -p %s root@%s\n\n' "${SSH_PORT_VALUE}" "${HOSTNAME_VALUE}"
   printf 'Traffic Guard timer status:\n%s\n\n' "${timer_status}"
   printf 'Manual blocklist update:\n%s\n\n' "${UPDATE_SCRIPT_TARGET}"
+  if [[ "${INSTALL_VPN_DEFENSE}" -eq 1 ]]; then
+    printf 'VPN defense profile:\n'
+    printf '  conntrack max: %s\n' "${DEFENSE_CT_MAX}"
+    printf '  conntrack buckets: %s\n' "${DEFENSE_CT_BUCKETS}"
+    printf '  somaxconn: %s\n' "${DEFENSE_SOMAXCONN}"
+    printf '  tcp_max_syn_backlog: %s\n' "${DEFENSE_SYN_BACKLOG}"
+    printf '  netdev_max_backlog: %s\n' "${DEFENSE_NETDEV_BACKLOG}"
+    printf '  SYN hashlimit: %s/sec burst %s on 80,443,8443\n\n' "${DEFENSE_SYN_RATE}" "${DEFENSE_SYN_BURST}"
+  fi
   if [[ "${INSTALL_XANMOD_LTS}" -eq 1 ]]; then
     printf 'XanMod LTS was requested. Reboot is required to activate the new kernel.\n'
     printf 'Automatic reboot: %s\n\n' "$([[ "${AUTO_REBOOT_AFTER_BOOTSTRAP}" -eq 1 ]] && printf 'yes' || printf 'no')"
@@ -652,6 +871,7 @@ main() {
   ask_hostname
   ask_ssh_port
   ask_ssh_key
+  ask_vpn_defense
   ask_xanmod_lts
   ask_xanmod_reboot
 
@@ -659,6 +879,7 @@ main() {
   configure_sysctl
   update_system
   install_packages
+  configure_vpn_defense_sysctl
   require_command curl
   require_command iptables
   require_command ipset
@@ -671,6 +892,7 @@ main() {
   setup_blocklists
   install_traffic_guard_updater
   apply_firewall_rules
+  configure_vpn_defense_firewall
   print_summary
   maybe_reboot
 }

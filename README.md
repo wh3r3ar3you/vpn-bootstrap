@@ -15,6 +15,7 @@
 - Oh My Zsh, Powerlevel10k и плагины для `root`
 - Speedtest CLI
 - sysctl-настройки для VPN-сценария
+- опциональный VPN defense profile с auto-tuned conntrack/backlog и `iptables` rate limits
 - интерактивную настройку hostname, SSH port и `root` SSH key
 - Traffic Guard blacklist на базе `ipset` + `iptables`
 - ежедневное безопасное обновление blocklist через `systemd timer`
@@ -67,6 +68,7 @@ chmod +x bootstrap.sh
 - hostname
 - SSH port
 - публичный SSH key для добавления в `/root/.ssh/authorized_keys`
+- устанавливать ли VPN defense profile
 - устанавливать ли XanMod LTS kernel
 - если XanMod выбран, делать ли автоматический reboot после успешного bootstrap
 
@@ -97,6 +99,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/wh3r3ar3you/vpn-bootstrap/ma
 - применяет sysctl через `sysctl -e -p`, чтобы неизвестные ключи старого ядра не ломали bootstrap
 - выполняет `apt-get update` и `apt-get -y upgrade`
 - проверяет apt-пакеты и устанавливает только отсутствующие через `apt-get`
+- опционально пишет `/etc/sysctl.d/99-vpn-defense.conf` и `/etc/modprobe.d/vpn-defense-conntrack.conf`
 - опционально добавляет официальный XanMod APT repo и ставит `linux-xanmod-lts-x64v1/v2/v3` по уровню CPU
 - если XanMod выбран и пользователь подтвердил auto reboot, перезагружает сервер после успешного завершения
 - устанавливает и включает Docker
@@ -111,6 +114,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/wh3r3ar3you/vpn-bootstrap/ma
 - гарантирует наличие правил `DROP`/`REJECT` для `ipset blacklist` во входящем, исходящем и forwarded-трафике
 - добавляет те же blocklist-ограничения в `DOCKER-USER`, если цепочка создана Docker
 - добавляет `TCPMSS --clamp-mss-to-pmtu` в `mangle/FORWARD` для туннельного TCP-трафика
+- если выбран VPN defense profile, добавляет comment-based `iptables` rules для SYN hashlimit, UDP amplification filter и ICMP echo-request rate limit
 - гарантирует наличие ровно одного правила блокировки `ICMP echo-request`
 - сохраняет firewall-правила через `netfilter-persistent save` только после успешного применения
 
@@ -185,6 +189,26 @@ Bootstrap записывает два файла:
 - `nf_conntrack_*` увеличивает таблицу conntrack и сокращает слишком длинные таймауты для VPN/exit-нагрузки.
 
 Итог: после установки сервер получает более агрессивный и практичный сетевой профиль под VPN/туннельную нагрузку, а не дефолтные conservative-настройки дистрибутива.
+
+## 🛡 VPN defense profile
+
+VPN defense profile выключен по умолчанию и включается отдельным интерактивным вопросом.
+
+Если выбрать `yes`, bootstrap:
+
+- считает RAM и CPU count
+- подбирает `nf_conntrack_max`, conntrack hash buckets, `somaxconn`, `tcp_max_syn_backlog`, `netdev_max_backlog`
+- пишет `/etc/sysctl.d/99-vpn-defense.conf`
+- пишет `/etc/modprobe.d/vpn-defense-conntrack.conf` для conntrack hashsize после reboot
+- применяет доступные sysctl сразу через `sysctl -e -p`
+- создаёт или пересоздаёт chains `VPN_SYN_LIM` и `VPN_UDP_AMP`
+- добавляет в `INPUT` только правила с comment `vpn-defense`
+- ограничивает TCP SYN на `80,443,8443` через `hashlimit` per source IP
+- ограничивает UDP amplification-поток по source ports `19,53,123,389,1900,11211,5060,1194`
+- пропускает ICMP echo-request до `30/sec` burst `60`, а лишнее режет
+- сохраняет firewall через `netfilter-persistent save`
+
+Профиль не ставит CrowdSec, fail2ban и REALITY/Xray guard.
 
 ## 🧬 XanMod LTS kernel
 

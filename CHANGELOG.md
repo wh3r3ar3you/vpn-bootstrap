@@ -21,6 +21,7 @@
 - `README.md`, `.gitignore`, `.editorconfig`, `.gitattributes`
 - GitHub Actions workflow для `bash -n` и `shellcheck`
 - `LICENSE`
+- опциональный VPN defense profile с auto-tuned conntrack/backlog sysctl и `iptables` hashlimit rules
 
 ### Changed
 
