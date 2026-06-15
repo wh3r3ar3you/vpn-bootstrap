@@ -7,7 +7,9 @@ readonly BLOCKLIST_DIR="/opt/blocklists"
 readonly ACTIVE_SET="blacklist"
 readonly TEMP_SET_PREFIX="blacklist_new"
 readonly LOCK_FILE="/run/lock/traffic-guard-update.lock"
-readonly IPTABLES_MATCH_RULE=(-m set --match-set "${ACTIVE_SET}" src -j DROP)
+readonly IPSET_MAXELEM=500000
+readonly IPSET_HASHSIZE=65536
+readonly CURL_RETRY_ARGS=(--connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 --retry-all-errors)
 readonly SOURCES=(
   "https://raw.githubusercontent.com/shadow-netlab/traffic-guard-lists/refs/heads/main/public/government_networks.list"
   "https://raw.githubusercontent.com/shadow-netlab/traffic-guard-lists/refs/heads/main/public/antiscanner.list"
@@ -57,15 +59,6 @@ init_temp_set_name() {
 validate_entry() {
   local entry="$1"
 
-  if [[ "${entry}" =~ : ]]; then
-    ipset test "${TEMP_SET}" "${entry}" >/dev/null 2>&1 && return 0
-    ipset add "${TEMP_SET}" "${entry}" -exist >/dev/null 2>&1 && {
-      ipset del "${TEMP_SET}" "${entry}" >/dev/null 2>&1 || true
-      return 0
-    }
-    return 1
-  fi
-
   ipset test "${TEMP_SET}" "${entry}" >/dev/null 2>&1 && return 0
   ipset add "${TEMP_SET}" "${entry}" -exist >/dev/null 2>&1 && {
     ipset del "${TEMP_SET}" "${entry}" >/dev/null 2>&1 || true
@@ -83,7 +76,7 @@ collect_entries() {
   for source in "${SOURCES[@]}"; do
     tmp_file="$(mktemp)"
     log "Downloading ${source}"
-    curl -fsSL "${source}" -o "${tmp_file}"
+    curl -fsSL "${CURL_RETRY_ARGS[@]}" "${source}" -o "${tmp_file}"
     cat "${tmp_file}" >> "${normalized_file}"
     rm -f "${tmp_file}"
   done
@@ -122,36 +115,55 @@ collect_entries() {
 }
 
 populate_temp_set() {
-  local count=0
+  local count restore_file
 
   ipset destroy "${TEMP_SET}" >/dev/null 2>&1 || true
-  ipset create "${TEMP_SET}" hash:net family inet maxelem 200000
-
-  while IFS= read -r entry; do
-    [[ -n "${entry}" ]] || continue
-    ipset add "${TEMP_SET}" "${entry}" -exist
-    count=$((count + 1))
-  done < "${BLOCKLIST_DIR}/blacklist.current"
+  restore_file="$(mktemp)"
+  count="$(grep -cve '^[[:space:]]*$' "${BLOCKLIST_DIR}/blacklist.current" || true)"
 
   if (( count == 0 )); then
+    rm -f "${restore_file}"
     log "Temporary blacklist set is empty, refusing to swap"
     exit 1
   fi
+
+  {
+    printf 'create %s hash:net family inet hashsize %s maxelem %s\n' "${TEMP_SET}" "${IPSET_HASHSIZE}" "${IPSET_MAXELEM}"
+    awk -v set_name="${TEMP_SET}" '{ print "add " set_name " " $0 " -exist" }' "${BLOCKLIST_DIR}/blacklist.current"
+  } > "${restore_file}"
+
+  ipset restore -exist < "${restore_file}"
+  rm -f "${restore_file}"
 
   log "Prepared temporary ipset with ${count} entries"
 }
 
 ensure_active_set() {
   if ! ipset list -n | grep -Fxq "${ACTIVE_SET}"; then
-    ipset create "${ACTIVE_SET}" hash:net family inet maxelem 200000
+    ipset create "${ACTIVE_SET}" hash:net family inet hashsize "${IPSET_HASHSIZE}" maxelem "${IPSET_MAXELEM}"
     log "Created active ipset ${ACTIVE_SET}"
   fi
 }
 
-ensure_firewall_rule() {
-  if ! iptables -C INPUT "${IPTABLES_MATCH_RULE[@]}" >/dev/null 2>&1; then
-    iptables -I INPUT "${IPTABLES_MATCH_RULE[@]}"
-    log "Added missing iptables DROP rule for ${ACTIVE_SET}"
+ensure_iptables_rule() {
+  local rule=("$@")
+
+  if ! iptables -C "${rule[@]}" >/dev/null 2>&1; then
+    iptables -I "${rule[@]}"
+    log "Added missing iptables rule: ${rule[*]}"
+  fi
+}
+
+ensure_docker_user_rule() {
+  local rule=("$@")
+
+  if ! iptables -nL DOCKER-USER >/dev/null 2>&1; then
+    return
+  fi
+
+  if ! iptables -C DOCKER-USER "${rule[@]}" >/dev/null 2>&1; then
+    iptables -I DOCKER-USER "${rule[@]}"
+    log "Added missing DOCKER-USER rule: ${rule[*]}"
   fi
 }
 
@@ -159,6 +171,27 @@ swap_sets() {
   ipset swap "${TEMP_SET}" "${ACTIVE_SET}"
   ipset destroy "${TEMP_SET}"
   log "Atomically swapped ${TEMP_SET} into ${ACTIVE_SET}"
+}
+
+ensure_firewall_rules() {
+  ensure_iptables_rule INPUT -m set --match-set "${ACTIVE_SET}" src -j DROP
+  ensure_iptables_rule FORWARD -m set --match-set "${ACTIVE_SET}" src -j DROP
+  ensure_iptables_rule FORWARD -m set --match-set "${ACTIVE_SET}" dst -j REJECT
+  ensure_iptables_rule OUTPUT -m set --match-set "${ACTIVE_SET}" dst -j REJECT
+  ensure_docker_user_rule -m set --match-set "${ACTIVE_SET}" src -j DROP
+  ensure_docker_user_rule -m set --match-set "${ACTIVE_SET}" dst -j REJECT
+}
+
+save_firewall_state() {
+  if command -v netfilter-persistent >/dev/null 2>&1; then
+    netfilter-persistent save >/dev/null || log "netfilter-persistent save failed"
+    return
+  fi
+
+  if command -v ipset-save >/dev/null 2>&1; then
+    install -d -m 755 /etc/iptables
+    ipset-save > /etc/iptables/ipsets || log "ipset-save failed"
+  fi
 }
 
 main() {
@@ -180,11 +213,12 @@ main() {
   init_temp_set_name
   ensure_active_set
   ipset destroy "${TEMP_SET}" >/dev/null 2>&1 || true
-  ipset create "${TEMP_SET}" hash:net family inet maxelem 200000
+  ipset create "${TEMP_SET}" hash:net family inet hashsize "${IPSET_HASHSIZE}" maxelem "${IPSET_MAXELEM}"
   collect_entries
   populate_temp_set
   swap_sets
-  ensure_firewall_rule
+  ensure_firewall_rules
+  save_firewall_state
   log "Traffic Guard update completed successfully"
 }
 

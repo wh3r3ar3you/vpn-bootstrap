@@ -26,3 +26,10 @@
 
 - `install.sh` больше не зависит от `git`: installer проверяет базовые утилиты, ставит недостающее и скачивает архив репозитория
 - `bootstrap.sh` теперь проверяет apt-пакеты и ставит только отсутствующие, включая `openssh-server` на пустых образах
+- расширен Linux/VPN tuning: IPv4 forwarding, `src_valid_mark`, больший backlog/socket buffers, TCP/UDP tuning и conntrack-параметры
+- SSH hardening теперь явно включает key-only root login, отключает password login и не трогает `Match`-блоки при правке `sshd_config`
+- Traffic Guard применяет blocklist для `INPUT`, `FORWARD` и `OUTPUT`, а forwarded TCP получает `TCPMSS --clamp-mss-to-pmtu` в `mangle`
+- добавлены container-aware firewall rules через `DOCKER-USER` для Docker VPN-сервисов
+- updater blocklist использует retry/timeout для загрузок и bulk-загрузку через `ipset restore`
+- `traffic-guard-update.service` ограничен capability-набором и write paths через systemd hardening
+- добавлена опциональная установка XanMod LTS kernel с автоопределением `x86-64-v1/v2/v3`

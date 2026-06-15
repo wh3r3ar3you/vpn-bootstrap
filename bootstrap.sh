@@ -9,10 +9,17 @@ readonly SERVICE_TARGET="/etc/systemd/system/traffic-guard-update.service"
 readonly TIMER_TARGET="/etc/systemd/system/traffic-guard-update.timer"
 readonly SSHD_CONFIG="/etc/ssh/sshd_config"
 readonly SSHD_BACKUP="/etc/ssh/sshd_config.bak.bootstrap"
+readonly SYSCTL_IPV6_FILE="/etc/sysctl.d/99-disable-ipv6.conf"
+readonly SYSCTL_TUNING_FILE="/etc/sysctl.d/99-vpn-tuning.conf"
+readonly BLOCKLIST_SET="blacklist"
+readonly IPSET_MAXELEM=500000
+readonly XANMOD_KEYRING="/etc/apt/keyrings/xanmod-archive-keyring.gpg"
+readonly XANMOD_SOURCE_LIST="/etc/apt/sources.list.d/xanmod-release.list"
 
 HOSTNAME_VALUE=""
 SSH_PORT_VALUE="${DEFAULT_SSH_PORT}"
 SSH_KEY_VALUE=""
+INSTALL_XANMOD_LTS=0
 SSH_SERVICE_NAME=""
 
 log() {
@@ -37,6 +44,11 @@ require_command() {
 is_apt_package_installed() {
   local package="$1"
   dpkg-query -W -f='${Status}' "${package}" 2>/dev/null | grep -Fqx 'install ok installed'
+}
+
+is_apt_package_available() {
+  local package="$1"
+  apt-cache show "${package}" >/dev/null 2>&1
 }
 
 install_apt_packages() {
@@ -107,17 +119,43 @@ ask_ssh_port() {
 }
 
 ask_ssh_key() {
-  local input
+  local input key_type
 
   while true; do
     read -r -p "Enter public SSH key to add to /root/.ssh/authorized_keys: " input
 
-    if [[ -n "${input}" ]]; then
+    key_type="${input%% *}"
+    if [[ "${input}" =~ ^(ssh-ed25519|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521|sk-ssh-ed25519@openssh.com|sk-ecdsa-sha2-nistp256@openssh.com|ssh-rsa)[[:space:]][A-Za-z0-9+/=]+([[:space:]].*)?$ ]]; then
+      if [[ "${key_type}" == "ssh-rsa" ]]; then
+        printf 'Warning: ssh-rsa keys are accepted for compatibility, but ed25519 is preferred.\n' >&2
+      fi
       SSH_KEY_VALUE="${input}"
       return
     fi
 
-    printf 'Public SSH key is required.\n' >&2
+    printf 'Invalid public SSH key. Paste a single OpenSSH public key line.\n' >&2
+  done
+}
+
+ask_xanmod_lts() {
+  local input
+
+  while true; do
+    read -r -p "Install XanMod LTS kernel after package setup? [y/N]: " input
+    input="${input:-n}"
+
+    case "${input}" in
+      y|Y|yes|YES)
+        INSTALL_XANMOD_LTS=1
+        return
+        ;;
+      n|N|no|NO)
+        INSTALL_XANMOD_LTS=0
+        return
+        ;;
+    esac
+
+    printf 'Enter y or n.\n' >&2
   done
 }
 
@@ -141,35 +179,56 @@ configure_hostname() {
 configure_sysctl() {
   log "Configuring sysctl"
 
-  cat <<'EOF' > /etc/sysctl.d/99-disable-ipv6.conf
+  cat <<'EOF' > "${SYSCTL_IPV6_FILE}"
 net.ipv6.conf.all.disable_ipv6=1
 net.ipv6.conf.default.disable_ipv6=1
-net.ipv6.conf.lo.disable_ipv6=1
 EOF
 
-  cat <<'EOF' > /etc/sysctl.d/99-vpn-tuning.conf
+  cat <<'EOF' > "${SYSCTL_TUNING_FILE}"
 
 net.core.default_qdisc=fq
 net.ipv4.tcp_congestion_control=bbr
 
+net.ipv4.ip_forward=1
+net.ipv4.conf.all.forwarding=1
+net.ipv4.conf.default.forwarding=1
+
 net.ipv4.conf.all.rp_filter=0
 net.ipv4.conf.default.rp_filter=0
+net.ipv4.conf.all.src_valid_mark=1
+net.ipv4.conf.default.src_valid_mark=1
 
 net.core.rmem_max=67108864
 net.core.wmem_max=67108864
 net.core.rmem_default=262144
 net.core.wmem_default=262144
+net.core.optmem_max=4194304
 
 net.core.netdev_max_backlog=250000
-net.core.somaxconn=4096
+net.core.somaxconn=8192
 
 net.ipv4.tcp_fastopen=3
 net.ipv4.tcp_rmem=4096 87380 67108864
 net.ipv4.tcp_wmem=4096 65536 67108864
 net.ipv4.tcp_mtu_probing=1
+net.ipv4.tcp_slow_start_after_idle=0
+net.ipv4.tcp_notsent_lowat=16384
+net.ipv4.tcp_tw_reuse=1
+
+net.ipv4.udp_rmem_min=8192
+net.ipv4.udp_wmem_min=8192
+
+net.ipv4.ip_local_port_range=1024 65535
+net.ipv4.tcp_max_syn_backlog=8192
+
+net.netfilter.nf_conntrack_max=1048576
+net.netfilter.nf_conntrack_tcp_timeout_established=7440
+net.netfilter.nf_conntrack_udp_timeout=60
+net.netfilter.nf_conntrack_udp_timeout_stream=180
 EOF
 
-  sysctl --system >/dev/null
+  sysctl -e -p "${SYSCTL_IPV6_FILE}" >/dev/null
+  sysctl -e -p "${SYSCTL_TUNING_FILE}" >/dev/null
 }
 
 update_system() {
@@ -196,9 +255,94 @@ install_packages() {
     gnupg \
     lsb-release \
     openssh-server \
+    openssh-client \
     ipset \
     iptables \
     iptables-persistent
+
+  if is_apt_package_available ipset-persistent; then
+    install_apt_packages ipset-persistent
+  else
+    log "Optional apt package is not available: ipset-persistent"
+  fi
+}
+
+is_supported_xanmod_codename() {
+  local codename="$1"
+
+  case "${codename}" in
+    bookworm|trixie|forky|sid|noble|plucky|questing|resolute|stonking|faye|gigi|wilma|xia|zara|zena)
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
+detect_x86_64_psabi_level() {
+  local loader
+
+  if [[ "$(uname -m)" != "x86_64" ]]; then
+    printf ''
+    return
+  fi
+
+  for loader in /lib64/ld-linux-x86-64.so.2 /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2; do
+    [[ -x "${loader}" ]] || continue
+
+    if "${loader}" --help 2>/dev/null | grep -Fq 'x86-64-v3 (supported'; then
+      printf 'v3'
+      return
+    fi
+
+    if "${loader}" --help 2>/dev/null | grep -Fq 'x86-64-v2 (supported'; then
+      printf 'v2'
+      return
+    fi
+  done
+
+  printf 'v1'
+}
+
+install_xanmod_lts() {
+  local codename psabi_level package tmp_key
+
+  if [[ "${INSTALL_XANMOD_LTS}" -ne 1 ]]; then
+    log "Skipping XanMod LTS kernel installation"
+    return
+  fi
+
+  if [[ "$(uname -m)" != "x86_64" ]]; then
+    log "Skipping XanMod LTS: only amd64/x86_64 is supported"
+    return
+  fi
+
+  codename="$(lsb_release -sc)"
+  if ! is_supported_xanmod_codename "${codename}"; then
+    log "Skipping XanMod LTS: unsupported distribution codename ${codename}"
+    return
+  fi
+
+  psabi_level="$(detect_x86_64_psabi_level)"
+  if [[ -z "${psabi_level}" ]]; then
+    log "Skipping XanMod LTS: unable to detect x86-64 psABI level"
+    return
+  fi
+
+  package="linux-xanmod-lts-x64${psabi_level}"
+  log "Installing XanMod LTS kernel package: ${package}"
+
+  install -d -m 755 /etc/apt/keyrings
+  tmp_key="$(mktemp)"
+  wget -qO "${tmp_key}" https://dl.xanmod.org/archive.key
+  gpg --dearmor --yes -o "${XANMOD_KEYRING}" "${tmp_key}"
+  rm -f "${tmp_key}"
+
+  printf 'deb [signed-by=%s] http://deb.xanmod.org %s main\n' "${XANMOD_KEYRING}" "${codename}" > "${XANMOD_SOURCE_LIST}"
+
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update
+  apt-get install -y "${package}"
 }
 
 install_docker() {
@@ -307,23 +451,56 @@ configure_ssh() {
   cp -a "${SSHD_CONFIG}" "${SSHD_BACKUP}"
   tmp_file="$(mktemp)"
   awk -v port="${SSH_PORT_VALUE}" '
-    BEGIN {
-      replaced = 0
-    }
-    /^[[:space:]]*#?[[:space:]]*Port[[:space:]]+/ {
-      if (replaced == 0) {
-        print "Port " port
-        replaced = 1
+    function emit_missing() {
+      for (key in desired) {
+        if (!(key in emitted)) {
+          print key " " desired[key]
+          emitted[key] = 1
+        }
       }
+    }
+    BEGIN {
+      desired["Port"] = port
+      desired["PubkeyAuthentication"] = "yes"
+      desired["PasswordAuthentication"] = "no"
+      desired["KbdInteractiveAuthentication"] = "no"
+      desired["ChallengeResponseAuthentication"] = "no"
+      desired["PermitRootLogin"] = "prohibit-password"
+      desired["PermitEmptyPasswords"] = "no"
+      desired["X11Forwarding"] = "no"
+      desired["AllowTcpForwarding"] = "yes"
+      desired["ClientAliveInterval"] = "300"
+      desired["ClientAliveCountMax"] = "2"
+      desired["MaxAuthTries"] = "3"
+      desired["LoginGraceTime"] = "30"
+    }
+    /^[[:space:]]*Match[[:space:]]+/ {
+      emit_missing()
+      in_match = 1
+      print
       next
     }
     {
+      if (in_match) {
+        print
+        next
+      }
+
+      line = $0
+      for (key in desired) {
+        pattern = "^[[:space:]]*#?[[:space:]]*" key "[[:space:]]+"
+        if (line ~ pattern) {
+          if (!(key in emitted)) {
+            print key " " desired[key]
+            emitted[key] = 1
+          }
+          next
+        }
+      }
       print
     }
     END {
-      if (replaced == 0) {
-        print "Port " port
-      }
+      emit_missing()
     }
   ' "${SSHD_CONFIG}" > "${tmp_file}"
 
@@ -351,6 +528,7 @@ install_traffic_guard_updater() {
   repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
   log "Installing Traffic Guard updater"
+  install -d -m 755 /etc/iptables
   install -m 755 "${repo_root}/scripts/update-traffic-guard.sh" "${UPDATE_SCRIPT_TARGET}"
   install -m 644 "${repo_root}/systemd/traffic-guard-update.service" "${SERVICE_TARGET}"
   install -m 644 "${repo_root}/systemd/traffic-guard-update.timer" "${TIMER_TARGET}"
@@ -368,13 +546,41 @@ ensure_iptables_rule() {
   fi
 }
 
+ensure_iptables_mangle_rule() {
+  local rule=("$@")
+  if ! iptables -t mangle -C "${rule[@]}" >/dev/null 2>&1; then
+    iptables -t mangle -I "${rule[@]}"
+  fi
+}
+
+ensure_docker_user_rule() {
+  local rule=("$@")
+
+  if ! iptables -nL DOCKER-USER >/dev/null 2>&1; then
+    return
+  fi
+
+  if ! iptables -C DOCKER-USER "${rule[@]}" >/dev/null 2>&1; then
+    iptables -I DOCKER-USER "${rule[@]}"
+  fi
+}
+
 apply_firewall_rules() {
   log "Applying firewall rules"
 
-  ipset create blacklist hash:net family inet maxelem 200000 -exist
+  ipset create "${BLOCKLIST_SET}" hash:net family inet hashsize 65536 maxelem "${IPSET_MAXELEM}" -exist
 
-  ensure_iptables_rule INPUT -m set --match-set blacklist src -j DROP
+  ensure_iptables_rule INPUT -m conntrack --ctstate INVALID -j DROP
+  ensure_iptables_rule FORWARD -m conntrack --ctstate INVALID -j DROP
+  ensure_iptables_rule INPUT -m set --match-set "${BLOCKLIST_SET}" src -j DROP
+  ensure_iptables_rule FORWARD -m set --match-set "${BLOCKLIST_SET}" src -j DROP
+  ensure_iptables_rule FORWARD -m set --match-set "${BLOCKLIST_SET}" dst -j REJECT
+  ensure_iptables_rule OUTPUT -m set --match-set "${BLOCKLIST_SET}" dst -j REJECT
   ensure_iptables_rule INPUT -p icmp --icmp-type echo-request -j DROP
+  ensure_iptables_mangle_rule FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+  ensure_docker_user_rule -m conntrack --ctstate INVALID -j DROP
+  ensure_docker_user_rule -m set --match-set "${BLOCKLIST_SET}" src -j DROP
+  ensure_docker_user_rule -m set --match-set "${BLOCKLIST_SET}" dst -j REJECT
 
   netfilter-persistent save >/dev/null
 }
@@ -405,6 +611,7 @@ main() {
   ask_hostname
   ask_ssh_port
   ask_ssh_key
+  ask_xanmod_lts
 
   configure_hostname
   configure_sysctl
@@ -413,6 +620,7 @@ main() {
   require_command curl
   require_command iptables
   require_command ipset
+  install_xanmod_lts
   install_docker
   configure_zsh
   configure_authorized_keys
