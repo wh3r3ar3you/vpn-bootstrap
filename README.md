@@ -46,7 +46,7 @@
 ### Вариант 1: установка одной командой
 
 ```bash
-apt install curl -y && bash <(curl -fsSL https://raw.githubusercontent.com/wh3r3ar3you/vpn-bootstrap/main/install.sh)
+apt update && apt install curl -y && bash <(curl -fsSL https://raw.githubusercontent.com/wh3r3ar3you/vpn-bootstrap/main/install.sh)
 ```
 
 Что делает эта команда:
