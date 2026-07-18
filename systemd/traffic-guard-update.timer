@@ -1,5 +1,5 @@
 [Unit]
-Description=Run Traffic Guard updater daily
+Description=Ежедневное обновление Traffic Guard
 
 [Timer]
 OnBootSec=10m

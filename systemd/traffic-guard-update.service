@@ -1,5 +1,5 @@
 [Unit]
-Description=Update Traffic Guard ipset blacklist
+Description=Обновление списков блокировки Traffic Guard в ipset
 After=network-online.target
 Wants=network-online.target
 

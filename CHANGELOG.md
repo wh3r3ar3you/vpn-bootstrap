@@ -1,48 +1,55 @@
-# Changelog
+# Журнал изменений
 
-Все значимые изменения проекта будут фиксироваться в этом файле.
+Здесь фиксируются все значимые изменения проекта.
 
-Формат ориентирован на Keep a Changelog, версионирование можно вести в удобном для репозитория виде.
+Формат основан на рекомендациях Keep a Changelog.
 
-## [Unreleased]
+## [Не выпущено]
+
+## [0.2.1] - 2026-07-18
+
+### Изменено
+
+- документация, описание репозитория и тексты релиза приведены к единому русскому языку
+- русифицированы вопросы, сообщения и журналы установочных скриптов и служб
 
 ## [0.2.0] - 2026-07-18
 
-### Added
+### Добавлено
 
-- интерактивный `bootstrap.sh` с вводом hostname, SSH port и публичного SSH key
-- `install.sh` для one-line установки напрямую с GitHub
+- интерактивный `bootstrap.sh` с вводом имени узла, порта SSH и открытого ключа SSH
+- `install.sh` для установки одной командой непосредственно с GitHub
 - безопасная настройка `authorized_keys` без перезаписи существующих ключей
-- валидация SSH port и безопасное обновление `/etc/ssh/sshd_config` с проверкой через `sshd -t`
-- отдельный updater `scripts/update-traffic-guard.sh`
-- атомарное обновление blocklist через временный `ipset` и `ipset swap`
-- защита updater от параллельных запусков через `flock` и уникальный временный `ipset`
-- логирование обновления Traffic Guard в `/var/log/traffic-guard-update.log`
-- `systemd service` и `systemd timer` для ежедневного обновления blocklist
-- идемпотентное применение `iptables`-правил
+- проверка порта SSH и безопасное обновление `/etc/ssh/sshd_config` с проверкой через `sshd -t`
+- отдельный скрипт обновления `scripts/update-traffic-guard.sh`
+- атомарное обновление списков блокировки через временный набор `ipset` и команду `ipset swap`
+- защита от параллельных запусков через `flock` и уникальный временный набор `ipset`
+- журнал обновления Traffic Guard в `/var/log/traffic-guard-update.log`
+- служба и таймер `systemd` для ежедневного обновления списков блокировки
+- идемпотентное применение правил `iptables`
 - `README.md`, `.gitignore`, `.editorconfig`, `.gitattributes`
-- GitHub Actions workflow для `bash -n` и `shellcheck`
+- GitHub Actions для проверки синтаксиса Bash и ShellCheck
 - `LICENSE`
-- опциональный VPN defense profile с auto-tuned conntrack/backlog sysctl и `iptables` hashlimit rules
-- RPS/RFS tuning по всем CPU для RX-очередей основного интерфейса в VPN defense profile
-- обязательный persistent network tuning для VPN-нод через `vpn-node-network-tuning.service`
-- автоматическое отключение GRO и расширенный `fq` для single-queue и multi-queue NIC
+- дополнительный защитный профиль VPN с автоматическим подбором параметров `conntrack`, очередей и ограничений через `iptables`
+- RPS/RFS на всех ядрах процессора для очередей приёма основного интерфейса
+- обязательная постоянная настройка сети через `vpn-node-network-tuning.service`
+- автоматическое отключение GRO и расширенный `fq` для одноочередных и многоочередных сетевых интерфейсов
 - пакеты `ethtool` и `irqbalance` с автоматическим включением `irqbalance`
-- настраиваемые overrides через `/etc/default/vpn-node-network-tuning`
+- переопределение параметров через `/etc/default/vpn-node-network-tuning`
 
-### Changed
+### Изменено
 
-- `install.sh` больше не зависит от `git`: installer проверяет базовые утилиты, ставит недостающее и скачивает архив репозитория
-- `bootstrap.sh` теперь проверяет apt-пакеты и ставит только отсутствующие, включая `openssh-server` на пустых образах
-- расширен Linux/VPN tuning: IPv4 forwarding, `src_valid_mark`, больший backlog/socket buffers, TCP/UDP tuning и conntrack-параметры
-- SSH hardening теперь явно включает key-only root login, отключает password login и не трогает `Match`-блоки при правке `sshd_config`
-- Traffic Guard применяет blocklist для `INPUT`, `FORWARD` и `OUTPUT`, а forwarded TCP получает `TCPMSS --clamp-mss-to-pmtu` в `mangle`
-- добавлены container-aware firewall rules через `DOCKER-USER` для Docker VPN-сервисов
-- updater blocklist использует retry/timeout для загрузок и bulk-загрузку через `ipset restore`
-- `traffic-guard-update.service` ограничен capability-набором и write paths через systemd hardening
-- добавлена опциональная установка XanMod LTS kernel с автоопределением `x86-64-v1/v2/v3`
-- при выборе XanMod LTS bootstrap теперь отдельно спрашивает про автоматический reboot после успешной установки
-- README больше не дублирует отдельный быстрый сценарий установки, оставлена одна команда запуска
-- RPS/RFS вынесен из опционального defense profile в базовый профиль каждой VPN-ноды
-- TCP pre-auth очередь SSH увеличена до `MaxStartups 100:30:200`
-- базовые TCP backlog, orphan, FIN и keepalive параметры усилены для кратковременных всплесков нагрузки
+- `install.sh` больше не зависит от `git`: установщик проверяет базовые утилиты, устанавливает недостающие и скачивает архив репозитория
+- `bootstrap.sh` проверяет пакеты APT и устанавливает только отсутствующие, включая `openssh-server` на минимальных образах
+- расширена настройка Linux для VPN: пересылка IPv4, `src_valid_mark`, увеличенные очереди и буферы сокетов, параметры TCP/UDP и `conntrack`
+- SSH разрешает вход `root` только по ключу, отключает вход по паролю и не изменяет блоки `Match` в `sshd_config`
+- Traffic Guard применяет списки блокировки к `INPUT`, `FORWARD` и `OUTPUT`, а транзитный TCP получает `TCPMSS --clamp-mss-to-pmtu` в таблице `mangle`
+- добавлены правила межсетевого экрана в `DOCKER-USER` для контейнерных VPN-служб
+- скрипт обновления использует повторы и ограничения времени при загрузке, а также пакетную загрузку через `ipset restore`
+- служба `traffic-guard-update.service` ограничена минимальным набором разрешений и путей записи
+- добавлена дополнительная установка XanMod LTS с автоматическим определением `x86-64-v1/v2/v3`
+- при выборе XanMod LTS сценарий отдельно спрашивает об автоматической перезагрузке
+- README больше не дублирует быстрый способ установки: оставлена одна команда запуска
+- RPS/RFS перенесён из дополнительного защитного профиля в базовую настройку каждой VPN-ноды
+- очередь подключений SSH до авторизации увеличена до `MaxStartups 100:30:200`
+- усилены базовые параметры очередей TCP, потерянных сокетов, FIN и проверки активности для кратковременных всплесков нагрузки

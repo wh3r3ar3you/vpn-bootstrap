@@ -1,5 +1,5 @@
 [Unit]
-Description=Apply VPN node NIC and queue tuning
+Description=Настройка сетевого интерфейса и очередей VPN-ноды
 After=network-online.target
 Wants=network-online.target
 Before=docker.service

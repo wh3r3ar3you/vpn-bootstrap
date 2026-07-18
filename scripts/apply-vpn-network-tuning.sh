@@ -10,7 +10,7 @@ VPN_FQ_FLOW_LIMIT="${VPN_FQ_FLOW_LIMIT:-1000}"
 VPN_FQ_BUCKETS="${VPN_FQ_BUCKETS:-8192}"
 
 log() {
-  printf '[vpn-network-tuning] %s\n' "$*"
+  printf '[настройка-сети-vpn] %s\n' "$*"
 }
 
 require_positive_integer() {
@@ -18,7 +18,7 @@ require_positive_integer() {
   local value="$2"
 
   if [[ ! "${value}" =~ ^[0-9]+$ ]] || (( value < 1 )); then
-    printf '%s must be a positive integer, got: %s\n' "${name}" "${value}" >&2
+    printf '%s должно быть положительным целым числом, получено: %s\n' "${name}" "${value}" >&2
     exit 1
   fi
 }
@@ -72,7 +72,7 @@ apply_rps_rfs() {
 
   cpu_count="$(nproc)"
   if (( cpu_count <= 1 )); then
-    log "RPS/RFS skipped on a single-CPU node"
+    log "RPS/RFS пропущен на одноядерной ноде"
     return
   fi
 
@@ -82,7 +82,7 @@ apply_rps_rfs() {
   shopt -u nullglob
 
   if (( ${#rps_cpu_files[@]} == 0 || ${#rps_flow_files[@]} == 0 )); then
-    log "RPS/RFS skipped: ${iface} exposes no configurable RX queues"
+    log "RPS/RFS пропущен: интерфейс ${iface} не предоставляет настраиваемых очередей приёма"
     return
   fi
 
@@ -101,21 +101,21 @@ apply_rps_rfs() {
     [[ -w "${queue}" ]] && printf '%s\n' "${per_queue}" > "${queue}"
   done
 
-  log "RPS/RFS enabled on ${iface}: CPUs=${cpu_count} mask=${cpu_mask} flows=${VPN_RPS_FLOW_ENTRIES}/${per_queue}"
+  log "RPS/RFS включён на ${iface}: ядра=${cpu_count} маска=${cpu_mask} потоки=${VPN_RPS_FLOW_ENTRIES}/${per_queue}"
 }
 
 disable_gro() {
   local iface="$1"
 
   if [[ "${VPN_DISABLE_GRO}" != "1" ]]; then
-    log "GRO override disabled by configuration"
+    log "Изменение GRO отключено в конфигурации"
     return
   fi
 
   if ethtool -K "${iface}" gro off >/dev/null 2>&1; then
-    log "GRO disabled on ${iface}"
+    log "GRO отключён на ${iface}"
   else
-    log "GRO could not be changed on ${iface}; continuing"
+    log "Не удалось изменить GRO на ${iface}; настройка продолжается"
   fi
 
   ethtool -K "${iface}" rx-gro-hw off >/dev/null 2>&1 || true
@@ -149,13 +149,13 @@ apply_fq() {
 
   if (( ${#tx_queues[@]} <= 1 )); then
     replace_fq "${iface}" root
-    log "Expanded fq installed as the root qdisc on ${iface}"
+    log "Расширенный fq установлен как корневая очередь на ${iface}"
     return
   fi
 
   root_kind="$(tc qdisc show dev "${iface}" | awk '$4 == "root" { print $2; exit }')"
   if [[ "${root_kind}" != "mq" ]]; then
-    log "Preserving ${root_kind:-unknown} root qdisc on multi-queue interface ${iface}"
+    log "Корневая очередь ${root_kind:-неизвестно} сохранена на многоочередном интерфейсе ${iface}"
     return
   fi
 
@@ -171,7 +171,7 @@ apply_fq() {
     replace_fq "${iface}" parent "${parent}"
   done
 
-  log "Expanded fq installed on ${#parents[@]} hardware TX queues of ${iface}"
+  log "Расширенный fq установлен на ${#parents[@]} аппаратных очередях передачи интерфейса ${iface}"
 }
 
 main() {
@@ -184,7 +184,7 @@ main() {
 
   iface="${VPN_PRIMARY_INTERFACE:-$(detect_primary_interface)}"
   if [[ -z "${iface}" || ! -d "/sys/class/net/${iface}" ]]; then
-    printf 'Unable to detect the primary network interface\n' >&2
+    printf 'Не удалось определить основной сетевой интерфейс\n' >&2
     exit 1
   fi
 

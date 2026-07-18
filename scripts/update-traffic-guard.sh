@@ -24,7 +24,7 @@ log() {
 
 require_root() {
   if [[ "${EUID}" -ne 0 ]]; then
-    log "This updater must run as root"
+    log "Скрипт обновления необходимо запускать от root"
     exit 1
   fi
 }
@@ -32,7 +32,7 @@ require_root() {
 require_command() {
   local cmd="$1"
   if ! command -v "${cmd}" >/dev/null 2>&1; then
-    log "Required command not found: ${cmd}"
+    log "Не найдена обязательная команда: ${cmd}"
     exit 1
   fi
 }
@@ -47,7 +47,7 @@ acquire_lock() {
   install -d -m 755 /run/lock
   exec 9>"${LOCK_FILE}"
   if ! flock -n 9; then
-    log "Another Traffic Guard update is already running, exiting"
+    log "Другое обновление Traffic Guard уже выполняется, выход"
     exit 0
   fi
 }
@@ -75,7 +75,7 @@ collect_entries() {
 
   for source in "${SOURCES[@]}"; do
     tmp_file="$(mktemp)"
-    log "Downloading ${source}"
+    log "Загружается ${source}"
     curl -fsSL "${CURL_RETRY_ARGS[@]}" "${source}" -o "${tmp_file}"
     cat "${tmp_file}" >> "${normalized_file}"
     rm -f "${tmp_file}"
@@ -98,20 +98,20 @@ collect_entries() {
       valid_count=$((valid_count + 1))
     else
       invalid_count=$((invalid_count + 1))
-      log "Skipping invalid entry: ${entry}"
+      log "Некорректная запись пропущена: ${entry}"
     fi
   done < "${normalized_file}.sorted"
 
   if (( valid_count == 0 )); then
     rm -f "${normalized_file}" "${normalized_file}.sorted" "${normalized_file}.valid"
-    log "No valid entries collected, keeping the current blacklist unchanged"
+    log "Корректные записи не получены, текущий список блокировки оставлен без изменений"
     exit 1
   fi
 
   mv "${normalized_file}.valid" "${BLOCKLIST_DIR}/blacklist.current"
   rm -f "${normalized_file}" "${normalized_file}.sorted"
 
-  log "Collected ${valid_count} valid entries, skipped ${invalid_count} invalid entries"
+  log "Получено корректных записей: ${valid_count}; пропущено некорректных: ${invalid_count}"
 }
 
 populate_temp_set() {
@@ -123,7 +123,7 @@ populate_temp_set() {
 
   if (( count == 0 )); then
     rm -f "${restore_file}"
-    log "Temporary blacklist set is empty, refusing to swap"
+    log "Временный набор блокировки пуст, замена отменена"
     exit 1
   fi
 
@@ -135,13 +135,13 @@ populate_temp_set() {
   ipset restore -exist < "${restore_file}"
   rm -f "${restore_file}"
 
-  log "Prepared temporary ipset with ${count} entries"
+  log "Подготовлен временный набор ipset с числом записей: ${count}"
 }
 
 ensure_active_set() {
   if ! ipset list -n | grep -Fxq "${ACTIVE_SET}"; then
     ipset create "${ACTIVE_SET}" hash:net family inet hashsize "${IPSET_HASHSIZE}" maxelem "${IPSET_MAXELEM}"
-    log "Created active ipset ${ACTIVE_SET}"
+    log "Создан активный набор ipset ${ACTIVE_SET}"
   fi
 }
 
@@ -150,7 +150,7 @@ ensure_iptables_rule() {
 
   if ! iptables -C "${rule[@]}" >/dev/null 2>&1; then
     iptables -I "${rule[@]}"
-    log "Added missing iptables rule: ${rule[*]}"
+    log "Добавлено отсутствующее правило iptables: ${rule[*]}"
   fi
 }
 
@@ -163,14 +163,14 @@ ensure_docker_user_rule() {
 
   if ! iptables -C DOCKER-USER "${rule[@]}" >/dev/null 2>&1; then
     iptables -I DOCKER-USER "${rule[@]}"
-    log "Added missing DOCKER-USER rule: ${rule[*]}"
+    log "Добавлено отсутствующее правило DOCKER-USER: ${rule[*]}"
   fi
 }
 
 swap_sets() {
   ipset swap "${TEMP_SET}" "${ACTIVE_SET}"
   ipset destroy "${TEMP_SET}"
-  log "Atomically swapped ${TEMP_SET} into ${ACTIVE_SET}"
+  log "Набор ${TEMP_SET} атомарно заменил ${ACTIVE_SET}"
 }
 
 ensure_firewall_rules() {
@@ -184,13 +184,13 @@ ensure_firewall_rules() {
 
 save_firewall_state() {
   if command -v netfilter-persistent >/dev/null 2>&1; then
-    netfilter-persistent save >/dev/null || log "netfilter-persistent save failed"
+    netfilter-persistent save >/dev/null || log "Не удалось сохранить состояние через netfilter-persistent"
     return
   fi
 
   if command -v ipset-save >/dev/null 2>&1; then
     install -d -m 755 /etc/iptables
-    ipset-save > /etc/iptables/ipsets || log "ipset-save failed"
+    ipset-save > /etc/iptables/ipsets || log "Не удалось сохранить состояние через ipset-save"
   fi
 }
 
@@ -219,7 +219,7 @@ main() {
   swap_sets
   ensure_firewall_rules
   save_firewall_state
-  log "Traffic Guard update completed successfully"
+  log "Обновление Traffic Guard успешно завершено"
 }
 
 main "$@"

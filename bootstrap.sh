@@ -41,7 +41,7 @@ log() {
 
 require_root() {
   if [[ "${EUID}" -ne 0 ]]; then
-    printf 'Run as root\n' >&2
+    printf 'Запустите сценарий от root\n' >&2
     exit 1
   fi
 }
@@ -49,7 +49,7 @@ require_root() {
 require_command() {
   local cmd="$1"
   if ! command -v "${cmd}" >/dev/null 2>&1; then
-    printf 'Required command not found: %s\n' "${cmd}" >&2
+    printf 'Не найдена обязательная команда: %s\n' "${cmd}" >&2
     exit 1
   fi
 }
@@ -74,11 +74,11 @@ install_apt_packages() {
   done
 
   if [[ ${#missing_packages[@]} -eq 0 ]]; then
-    log "Required apt packages are already installed"
+    log "Все необходимые пакеты APT уже установлены"
     return
   fi
 
-  log "Installing missing apt packages: ${missing_packages[*]}"
+  log "Устанавливаются недостающие пакеты APT: ${missing_packages[*]}"
   export DEBIAN_FRONTEND=noninteractive
   apt-get install -y "${missing_packages[@]}"
 }
@@ -94,7 +94,7 @@ detect_ssh_service() {
     return
   fi
 
-  printf 'Unable to detect SSH service name (ssh or sshd)\n' >&2
+  printf 'Не удалось определить имя службы SSH (ssh или sshd)\n' >&2
   exit 1
 }
 
@@ -103,7 +103,7 @@ ask_hostname() {
   current_hostname="$(hostnamectl --static 2>/dev/null || hostnamectl hostname 2>/dev/null || hostname)"
 
   while true; do
-    read -r -p "Enter hostname [${current_hostname}]: " input
+    read -r -p "Введите имя узла [${current_hostname}]: " input
     input="${input:-${current_hostname}}"
 
     if [[ "${input}" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]{0,252}$ ]] && [[ "${input}" != *..* ]]; then
@@ -111,7 +111,7 @@ ask_hostname() {
       return
     fi
 
-    printf 'Invalid hostname. Use letters, digits, dots and hyphens.\n' >&2
+    printf 'Некорректное имя узла. Используйте латинские буквы, цифры, точки и дефисы.\n' >&2
   done
 }
 
@@ -119,7 +119,7 @@ ask_ssh_port() {
   local input
 
   while true; do
-    read -r -p "Enter SSH port [${DEFAULT_SSH_PORT}]: " input
+    read -r -p "Введите порт SSH [${DEFAULT_SSH_PORT}]: " input
     input="${input:-${DEFAULT_SSH_PORT}}"
 
     if [[ "${input}" =~ ^[0-9]+$ ]] && (( input >= 1 && input <= 65535 )); then
@@ -127,7 +127,7 @@ ask_ssh_port() {
       return
     fi
 
-    printf 'Invalid SSH port. Enter a number from 1 to 65535.\n' >&2
+    printf 'Некорректный порт SSH. Введите число от 1 до 65535.\n' >&2
   done
 }
 
@@ -135,18 +135,18 @@ ask_ssh_key() {
   local input key_type
 
   while true; do
-    read -r -p "Enter public SSH key to add to /root/.ssh/authorized_keys: " input
+    read -r -p "Введите открытый ключ SSH для добавления в /root/.ssh/authorized_keys: " input
 
     key_type="${input%% *}"
     if [[ "${input}" =~ ^(ssh-ed25519|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521|sk-ssh-ed25519@openssh.com|sk-ecdsa-sha2-nistp256@openssh.com|ssh-rsa)[[:space:]][A-Za-z0-9+/=]+([[:space:]].*)?$ ]]; then
       if [[ "${key_type}" == "ssh-rsa" ]]; then
-        printf 'Warning: ssh-rsa keys are accepted for compatibility, but ed25519 is preferred.\n' >&2
+        printf 'Предупреждение: ключи ssh-rsa поддерживаются для совместимости, но рекомендуется ed25519.\n' >&2
       fi
       SSH_KEY_VALUE="${input}"
       return
     fi
 
-    printf 'Invalid public SSH key. Paste a single OpenSSH public key line.\n' >&2
+    printf 'Некорректный открытый ключ SSH. Вставьте одну строку ключа OpenSSH.\n' >&2
   done
 }
 
@@ -154,21 +154,21 @@ ask_vpn_defense() {
   local input
 
   while true; do
-    read -r -p "Install VPN defense profile (auto-tuned conntrack/backlog, RPS/RFS + iptables rate limits)? [y/N]: " input
+    read -r -p "Установить защитный профиль VPN с автоматической настройкой conntrack, очередей и ограничений iptables? [д/Н]: " input
     input="${input:-n}"
 
     case "${input}" in
-      y|Y|yes|YES)
+      y|Y|yes|YES|д|Д|да|Да|ДА)
         INSTALL_VPN_DEFENSE=1
         return
         ;;
-      n|N|no|NO)
+      n|N|no|NO|н|Н|нет|Нет|НЕТ)
         INSTALL_VPN_DEFENSE=0
         return
         ;;
     esac
 
-    printf 'Enter y or n.\n' >&2
+    printf 'Введите д или н.\n' >&2
   done
 }
 
@@ -176,21 +176,21 @@ ask_xanmod_lts() {
   local input
 
   while true; do
-    read -r -p "Install XanMod LTS kernel after package setup? [y/N]: " input
+    read -r -p "Установить ядро XanMod LTS после настройки пакетов? [д/Н]: " input
     input="${input:-n}"
 
     case "${input}" in
-      y|Y|yes|YES)
+      y|Y|yes|YES|д|Д|да|Да|ДА)
         INSTALL_XANMOD_LTS=1
         return
         ;;
-      n|N|no|NO)
+      n|N|no|NO|н|Н|нет|Нет|НЕТ)
         INSTALL_XANMOD_LTS=0
         return
         ;;
     esac
 
-    printf 'Enter y or n.\n' >&2
+    printf 'Введите д или н.\n' >&2
   done
 }
 
@@ -203,28 +203,28 @@ ask_xanmod_reboot() {
   fi
 
   while true; do
-    read -r -p "Reboot automatically after successful bootstrap to activate XanMod? [y/N]: " input
+    read -r -p "Перезагрузить сервер после завершения, чтобы активировать XanMod? [д/Н]: " input
     input="${input:-n}"
 
     case "${input}" in
-      y|Y|yes|YES)
+      y|Y|yes|YES|д|Д|да|Да|ДА)
         AUTO_REBOOT_AFTER_BOOTSTRAP=1
         return
         ;;
-      n|N|no|NO)
+      n|N|no|NO|н|Н|нет|Нет|НЕТ)
         AUTO_REBOOT_AFTER_BOOTSTRAP=0
         return
         ;;
     esac
 
-    printf 'Enter y or n.\n' >&2
+    printf 'Введите д или н.\n' >&2
   done
 }
 
 configure_hostname() {
   local hosts_entry
 
-  log "Configuring hostname"
+  log "Настраивается имя узла"
   hostnamectl set-hostname "${HOSTNAME_VALUE}"
 
   hosts_entry="127.0.1.1 ${HOSTNAME_VALUE}"
@@ -239,7 +239,7 @@ configure_hostname() {
 }
 
 configure_sysctl() {
-  log "Configuring sysctl"
+  log "Применяются параметры sysctl"
 
   cat <<'EOF' > "${SYSCTL_IPV6_FILE}"
 net.ipv6.conf.all.disable_ipv6=1
@@ -363,7 +363,7 @@ calculate_vpn_defense_tuning() {
     DEFENSE_SYN_BURST=120
   fi
 
-  log "VPN defense auto-tune: nproc=${nproc} ram=${ram_gb}G ct_max=${DEFENSE_CT_MAX} buckets=${DEFENSE_CT_BUCKETS} somaxconn=${DEFENSE_SOMAXCONN} syn_backlog=${DEFENSE_SYN_BACKLOG} netdev_backlog=${DEFENSE_NETDEV_BACKLOG}"
+  log "Автонастройка защиты VPN: ядра=${nproc} память=${ram_gb}ГБ ct_max=${DEFENSE_CT_MAX} buckets=${DEFENSE_CT_BUCKETS} somaxconn=${DEFENSE_SOMAXCONN} syn_backlog=${DEFENSE_SYN_BACKLOG} netdev_backlog=${DEFENSE_NETDEV_BACKLOG}"
 }
 
 apply_conntrack_hashsize() {
@@ -381,12 +381,12 @@ configure_vpn_defense_sysctl() {
     return
   fi
 
-  log "Configuring VPN defense sysctl"
+  log "Применяются параметры sysctl защитного профиля VPN"
   calculate_vpn_defense_tuning
   apply_conntrack_hashsize
 
   cat <<EOF > "${SYSCTL_DEFENSE_FILE}"
-# Auto-tuned VPN defense profile.
+# Автоматически подобранный защитный профиль VPN.
 net.netfilter.nf_conntrack_max=${DEFENSE_CT_MAX}
 net.ipv4.tcp_syncookies=1
 net.core.somaxconn=${DEFENSE_SOMAXCONN}
@@ -403,11 +403,11 @@ configure_vpn_network_tuning() {
   local repo_root
   repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-  log "Installing persistent VPN network tuning"
+  log "Устанавливается постоянная настройка сети VPN-ноды"
   install -m 755 "${repo_root}/scripts/apply-vpn-network-tuning.sh" "${NETWORK_TUNING_SCRIPT_TARGET}"
   install -m 644 "${repo_root}/systemd/vpn-node-network-tuning.service" "${NETWORK_TUNING_SERVICE_TARGET}"
 
-  # Disable the superseded service when upgrading a node bootstrapped by an older release.
+  # При обновлении отключаем службу, которую использовали предыдущие выпуски.
   systemctl disable --now vpn-rps.service >/dev/null 2>&1 || true
   systemctl daemon-reload
   systemctl enable --now irqbalance >/dev/null
@@ -415,7 +415,7 @@ configure_vpn_network_tuning() {
 }
 
 update_system() {
-  log "Updating system packages"
+  log "Обновляются системные пакеты"
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
   apt-get -y upgrade
@@ -450,7 +450,7 @@ install_packages() {
   if is_apt_package_available ipset-persistent; then
     install_apt_packages ipset-persistent
   else
-    log "Optional apt package is not available: ipset-persistent"
+    log "Дополнительный пакет APT недоступен: ipset-persistent"
   fi
 }
 
@@ -495,29 +495,29 @@ install_xanmod_lts() {
   local codename psabi_level package tmp_key
 
   if [[ "${INSTALL_XANMOD_LTS}" -ne 1 ]]; then
-    log "Skipping XanMod LTS kernel installation"
+    log "Установка ядра XanMod LTS пропущена"
     return
   fi
 
   if [[ "$(uname -m)" != "x86_64" ]]; then
-    log "Skipping XanMod LTS: only amd64/x86_64 is supported"
+    log "XanMod LTS пропущен: поддерживается только amd64/x86_64"
     return
   fi
 
   codename="$(lsb_release -sc)"
   if ! is_supported_xanmod_codename "${codename}"; then
-    log "Skipping XanMod LTS: unsupported distribution codename ${codename}"
+    log "XanMod LTS пропущен: кодовое имя дистрибутива ${codename} не поддерживается"
     return
   fi
 
   psabi_level="$(detect_x86_64_psabi_level)"
   if [[ -z "${psabi_level}" ]]; then
-    log "Skipping XanMod LTS: unable to detect x86-64 psABI level"
+    log "XanMod LTS пропущен: не удалось определить уровень x86-64 psABI"
     return
   fi
 
   package="linux-xanmod-lts-x64${psabi_level}"
-  log "Installing XanMod LTS kernel package: ${package}"
+  log "Устанавливается пакет ядра XanMod LTS: ${package}"
 
   install -d -m 755 /etc/apt/keyrings
   tmp_key="$(mktemp)"
@@ -534,9 +534,9 @@ install_xanmod_lts() {
 
 install_docker() {
   if command -v docker >/dev/null 2>&1; then
-    log "Docker is already installed"
+    log "Docker уже установлен"
   else
-    log "Installing Docker"
+    log "Устанавливается Docker"
     curl -fsSL https://get.docker.com | sh
   fi
 
@@ -545,11 +545,11 @@ install_docker() {
 
 install_oh_my_zsh() {
   if [[ -d /root/.oh-my-zsh ]]; then
-    log "Oh My Zsh is already installed"
+    log "Oh My Zsh уже установлен"
     return
   fi
 
-  log "Installing Oh My Zsh"
+  log "Устанавливается Oh My Zsh"
   RUNZSH=no CHSH=no sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
 }
 
@@ -557,9 +557,9 @@ install_powerlevel10k() {
   local theme_dir="${ZSH_CUSTOM:-/root/.oh-my-zsh/custom}/themes/powerlevel10k"
 
   if [[ -d "${theme_dir}" ]]; then
-    log "Powerlevel10k is already installed"
+    log "Powerlevel10k уже установлен"
   else
-    log "Installing Powerlevel10k"
+    log "Устанавливается Powerlevel10k"
     git clone --depth=1 https://github.com/romkatv/powerlevel10k.git "${theme_dir}"
   fi
 
@@ -579,7 +579,7 @@ ensure_zsh_plugin() {
 }
 
 configure_zsh() {
-  log "Configuring Zsh"
+  log "Настраивается Zsh"
   install_oh_my_zsh
   install_powerlevel10k
 
@@ -601,11 +601,11 @@ configure_zsh() {
 
 install_speedtest() {
   if dpkg -s speedtest >/dev/null 2>&1; then
-    log "Speedtest is already installed"
+    log "Speedtest уже установлен"
     return
   fi
 
-  log "Installing Speedtest"
+  log "Устанавливается Speedtest"
   curl -fsSL https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh | bash
   export DEBIAN_FRONTEND=noninteractive
   apt-get install -y speedtest
@@ -615,23 +615,23 @@ configure_authorized_keys() {
   local ssh_dir="/root/.ssh"
   local auth_keys="${ssh_dir}/authorized_keys"
 
-  log "Configuring root authorized_keys"
+  log "Настраивается authorized_keys пользователя root"
   install -d -m 700 "${ssh_dir}"
   touch "${auth_keys}"
   chmod 600 "${auth_keys}"
 
   if grep -Fqx "${SSH_KEY_VALUE}" "${auth_keys}"; then
-    log "Public SSH key already exists in authorized_keys"
+    log "Открытый ключ SSH уже есть в authorized_keys"
   else
     printf '%s\n' "${SSH_KEY_VALUE}" >> "${auth_keys}"
-    log "Public SSH key added to authorized_keys"
+    log "Открытый ключ SSH добавлен в authorized_keys"
   fi
 }
 
 configure_ssh() {
   local sshd_binary tmp_file
 
-  log "Configuring SSH daemon"
+  log "Настраивается служба SSH"
   require_command sshd
   detect_ssh_service
 
@@ -699,7 +699,7 @@ configure_ssh() {
   sshd_binary="$(command -v sshd)"
   if ! "${sshd_binary}" -t; then
     cp -a "${SSHD_BACKUP}" "${SSHD_CONFIG}"
-    printf 'sshd configuration validation failed, original config restored\n' >&2
+    printf 'Проверка конфигурации sshd не пройдена, исходный файл восстановлен\n' >&2
     exit 1
   fi
 
@@ -707,7 +707,7 @@ configure_ssh() {
 }
 
 setup_blocklists() {
-  log "Preparing blocklist directory"
+  log "Подготавливается каталог списков блокировки"
   install -d -m 755 "${BLOCKLIST_DIR}"
 }
 
@@ -715,7 +715,7 @@ install_traffic_guard_updater() {
   local repo_root
   repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-  log "Installing Traffic Guard updater"
+  log "Устанавливается обновление Traffic Guard"
   install -d -m 755 /etc/iptables
   install -m 755 "${repo_root}/scripts/update-traffic-guard.sh" "${UPDATE_SCRIPT_TARGET}"
   install -m 644 "${repo_root}/systemd/traffic-guard-update.service" "${SERVICE_TARGET}"
@@ -814,7 +814,7 @@ configure_vpn_defense_firewall() {
     return
   fi
 
-  log "Applying VPN defense firewall rules"
+  log "Применяются правила межсетевого экрана защитного профиля VPN"
   ensure_iptables_chain VPN_SYN_LIM
   ensure_iptables_chain VPN_UDP_AMP
 
@@ -833,7 +833,7 @@ configure_vpn_defense_firewall() {
 }
 
 apply_firewall_rules() {
-  log "Applying firewall rules"
+  log "Применяются правила межсетевого экрана"
 
   ipset create "${BLOCKLIST_SET}" hash:net family inet hashsize 65536 maxelem "${IPSET_MAXELEM}" -exist
 
@@ -853,30 +853,38 @@ apply_firewall_rules() {
 }
 
 print_summary() {
-  local timer_status
+  local network_tuning_status timer_status
 
   timer_status="$(systemctl status traffic-guard-update.timer --no-pager --lines=6 2>/dev/null || true)"
+  network_tuning_status="$(systemctl is-active vpn-node-network-tuning.service 2>/dev/null || true)"
+  case "${network_tuning_status}" in
+    active) network_tuning_status="активна" ;;
+    inactive) network_tuning_status="неактивна" ;;
+    failed) network_tuning_status="ошибка" ;;
+    activating) network_tuning_status="запускается" ;;
+    *) network_tuning_status="${network_tuning_status:-неизвестно}" ;;
+  esac
 
-  printf '\n===== DONE =====\n\n'
-  printf 'Reconnect using:\n'
+  printf '\n===== ГОТОВО =====\n\n'
+  printf 'Для повторного подключения используйте:\n'
   printf 'ssh -p %s root@%s\n\n' "${SSH_PORT_VALUE}" "${HOSTNAME_VALUE}"
-  printf 'Traffic Guard timer status:\n%s\n\n' "${timer_status}"
-  printf 'Manual blocklist update:\n%s\n\n' "${UPDATE_SCRIPT_TARGET}"
+  printf 'Состояние таймера Traffic Guard:\n%s\n\n' "${timer_status}"
+  printf 'Ручное обновление списков блокировки:\n%s\n\n' "${UPDATE_SCRIPT_TARGET}"
   if [[ "${INSTALL_VPN_DEFENSE}" -eq 1 ]]; then
-    printf 'VPN defense profile:\n'
-    printf '  conntrack max: %s\n' "${DEFENSE_CT_MAX}"
-    printf '  conntrack buckets: %s\n' "${DEFENSE_CT_BUCKETS}"
+    printf 'Защитный профиль VPN:\n'
+    printf '  максимум записей conntrack: %s\n' "${DEFENSE_CT_MAX}"
+    printf '  корзины conntrack: %s\n' "${DEFENSE_CT_BUCKETS}"
     printf '  somaxconn: %s\n' "${DEFENSE_SOMAXCONN}"
     printf '  tcp_max_syn_backlog: %s\n' "${DEFENSE_SYN_BACKLOG}"
     printf '  netdev_max_backlog: %s\n' "${DEFENSE_NETDEV_BACKLOG}"
-    printf '  SYN hashlimit: %s/sec burst %s on 80,443,8443\n\n' "${DEFENSE_SYN_RATE}" "${DEFENSE_SYN_BURST}"
+    printf '  ограничение SYN: %s/с, всплеск %s на портах 80,443,8443\n\n' "${DEFENSE_SYN_RATE}" "${DEFENSE_SYN_BURST}"
   fi
-  printf 'VPN network tuning service: %s\n\n' "$(systemctl is-active vpn-node-network-tuning.service 2>/dev/null || true)"
+  printf 'Состояние службы настройки сети VPN: %s\n\n' "${network_tuning_status}"
   if [[ "${INSTALL_XANMOD_LTS}" -eq 1 ]]; then
-    printf 'XanMod LTS was requested. Reboot is required to activate the new kernel.\n'
-    printf 'Automatic reboot: %s\n\n' "$([[ "${AUTO_REBOOT_AFTER_BOOTSTRAP}" -eq 1 ]] && printf 'yes' || printf 'no')"
+    printf 'Запрошена установка XanMod LTS. Для активации нового ядра нужна перезагрузка.\n'
+    printf 'Автоматическая перезагрузка: %s\n\n' "$([[ "${AUTO_REBOOT_AFTER_BOOTSTRAP}" -eq 1 ]] && printf 'да' || printf 'нет')"
   fi
-  printf 'Then run:\n'
+  printf 'После подключения выполните:\n'
   printf 'p10k configure\n'
 }
 
@@ -885,7 +893,7 @@ maybe_reboot() {
     return
   fi
 
-  log "Rebooting to activate XanMod LTS kernel"
+  log "Сервер перезагружается для активации ядра XanMod LTS"
   systemctl reboot
 }
 
@@ -896,7 +904,7 @@ main() {
   require_command apt-get
   require_command dpkg-query
 
-  printf '===== VPN NODE BOOTSTRAP =====\n'
+  printf '===== НАСТРОЙКА VPN-НОДЫ =====\n'
 
   ask_hostname
   ask_ssh_port

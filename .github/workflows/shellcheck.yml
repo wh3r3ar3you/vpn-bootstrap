@@ -1,4 +1,4 @@
-name: Shell Scripts
+name: Проверка shell-скриптов
 
 on:
   push:
@@ -12,14 +12,14 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Получение кода
         uses: actions/checkout@v4
 
-      - name: Install shellcheck
+      - name: Установка ShellCheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
 
-      - name: Bash syntax check
+      - name: Проверка синтаксиса Bash
         run: bash -n bootstrap.sh install.sh scripts/update-traffic-guard.sh scripts/apply-vpn-network-tuning.sh
 
-      - name: Shellcheck
+      - name: Проверка ShellCheck
         run: shellcheck bootstrap.sh install.sh scripts/update-traffic-guard.sh scripts/apply-vpn-network-tuning.sh
