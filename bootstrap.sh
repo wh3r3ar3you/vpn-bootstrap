@@ -10,8 +10,10 @@ readonly TIMER_TARGET="/etc/systemd/system/traffic-guard-update.timer"
 readonly SSHD_CONFIG="/etc/ssh/sshd_config"
 readonly SSHD_BACKUP="/etc/ssh/sshd_config.bak.bootstrap"
 readonly SYSCTL_IPV6_FILE="/etc/sysctl.d/99-disable-ipv6.conf"
-readonly SYSCTL_TUNING_FILE="/etc/sysctl.d/99-vpn-tuning.conf"
+readonly SYSCTL_TUNING_FILE="/etc/sysctl.d/90-vpn-tuning.conf"
 readonly SYSCTL_DEFENSE_FILE="/etc/sysctl.d/99-vpn-defense.conf"
+readonly LEGACY_SYSCTL_TUNING_FILE="/etc/sysctl.d/99-vpn-tuning.conf"
+readonly LEGACY_SYSCTL_RPS_FILE="/etc/sysctl.d/99-vpn-rps.conf"
 readonly CONNTRACK_MODPROBE_FILE="/etc/modprobe.d/vpn-defense-conntrack.conf"
 readonly NETWORK_TUNING_SCRIPT_TARGET="/usr/local/sbin/apply-vpn-network-tuning.sh"
 readonly NETWORK_TUNING_SERVICE_TARGET="/etc/systemd/system/vpn-node-network-tuning.service"
@@ -238,64 +240,34 @@ configure_hostname() {
   fi
 }
 
+retire_legacy_sysctl_file() {
+  local legacy_file="$1"
+  local backup_file
+
+  if [[ ! -e "${legacy_file}" && ! -L "${legacy_file}" ]]; then
+    return
+  fi
+
+  backup_file="${legacy_file}.bak.vpn-bootstrap.$(date -u '+%Y%m%d%H%M%S')"
+  mv -- "${legacy_file}" "${backup_file}"
+  log "Устаревший файл sysctl перемещён в ${backup_file}"
+}
+
 configure_sysctl() {
+  local repo_root
+  repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
   log "Применяются параметры sysctl"
+
+  retire_legacy_sysctl_file "${LEGACY_SYSCTL_TUNING_FILE}"
+  retire_legacy_sysctl_file "${LEGACY_SYSCTL_RPS_FILE}"
 
   cat <<'EOF' > "${SYSCTL_IPV6_FILE}"
 net.ipv6.conf.all.disable_ipv6=1
 net.ipv6.conf.default.disable_ipv6=1
 EOF
 
-  cat <<'EOF' > "${SYSCTL_TUNING_FILE}"
-
-net.core.default_qdisc=fq
-net.ipv4.tcp_congestion_control=bbr
-
-net.ipv4.ip_forward=1
-net.ipv4.conf.all.forwarding=1
-net.ipv4.conf.default.forwarding=1
-
-net.ipv4.conf.all.rp_filter=0
-net.ipv4.conf.default.rp_filter=0
-net.ipv4.conf.all.src_valid_mark=1
-net.ipv4.conf.default.src_valid_mark=1
-
-net.core.rmem_max=67108864
-net.core.wmem_max=67108864
-net.core.rmem_default=262144
-net.core.wmem_default=262144
-net.core.optmem_max=4194304
-
-net.core.netdev_max_backlog=250000
-net.core.netdev_budget=600
-net.core.netdev_budget_usecs=4000
-net.core.somaxconn=32768
-net.core.rps_sock_flow_entries=32768
-
-net.ipv4.tcp_fastopen=3
-net.ipv4.tcp_rmem=4096 87380 67108864
-net.ipv4.tcp_wmem=4096 65536 67108864
-net.ipv4.tcp_mtu_probing=1
-net.ipv4.tcp_slow_start_after_idle=0
-net.ipv4.tcp_notsent_lowat=16384
-net.ipv4.tcp_tw_reuse=1
-net.ipv4.tcp_max_orphans=262144
-net.ipv4.tcp_fin_timeout=30
-net.ipv4.tcp_keepalive_time=600
-net.ipv4.tcp_keepalive_intvl=30
-net.ipv4.tcp_keepalive_probes=5
-
-net.ipv4.udp_rmem_min=8192
-net.ipv4.udp_wmem_min=8192
-
-net.ipv4.ip_local_port_range=1024 65535
-net.ipv4.tcp_max_syn_backlog=32768
-
-net.netfilter.nf_conntrack_max=1048576
-net.netfilter.nf_conntrack_tcp_timeout_established=7440
-net.netfilter.nf_conntrack_udp_timeout=60
-net.netfilter.nf_conntrack_udp_timeout_stream=180
-EOF
+  install -m 644 "${repo_root}/config/90-vpn-tuning.conf" "${SYSCTL_TUNING_FILE}"
 
   sysctl -e -p "${SYSCTL_IPV6_FILE}" >/dev/null
   sysctl -e -p "${SYSCTL_TUNING_FILE}" >/dev/null

@@ -37,11 +37,13 @@
 
 - `bootstrap.sh` — основной сценарий настройки
 - `install.sh` — установщик для быстрого запуска одной командой с GitHub
+- `config/90-vpn-tuning.conf` — базовые параметры ядра и TCP для VPN-ноды
 - `scripts/apply-vpn-network-tuning.sh` — применение настроек сетевого интерфейса, RPS/RFS и `fq`
 - `scripts/update-traffic-guard.sh` — ручное и автоматическое обновление списков блокировки
 - `systemd/vpn-node-network-tuning.service` — восстановление сетевых настроек после перезагрузки
 - `systemd/traffic-guard-update.service` — служба обновления Traffic Guard
 - `systemd/traffic-guard-update.timer` — таймер ежедневного обновления
+- `tests/sysctl-layout.sh` — проверка порядка применения базового и защитного профилей ядра
 - `README.md` — документация проекта
 - `CHANGELOG.md` — журнал изменений
 - `LICENSE` — лицензия проекта
@@ -87,7 +89,7 @@ chmod +x bootstrap.sh
 
 - задаёт имя узла и обновляет `/etc/hosts`
 - пишет `/etc/sysctl.d/99-disable-ipv6.conf`
-- пишет `/etc/sysctl.d/99-vpn-tuning.conf`
+- пишет `/etc/sysctl.d/90-vpn-tuning.conf`, чтобы базовые значения применялись раньше защитного профиля
 - применяет параметры через `sysctl -e -p`, чтобы неизвестные ключи старого ядра не прерывали настройку
 - выполняет `apt-get update` и `apt-get -y upgrade`
 - проверяет пакеты APT и устанавливает только отсутствующие через `apt-get`
@@ -119,9 +121,11 @@ chmod +x bootstrap.sh
 Сценарий записывает два файла:
 
 - `/etc/sysctl.d/99-disable-ipv6.conf`
-- `/etc/sysctl.d/99-vpn-tuning.conf`
+- `/etc/sysctl.d/90-vpn-tuning.conf`
 
 После этого каждый файл применяется через `sysctl -e -p`.
+
+При обновлении старые `/etc/sysctl.d/99-vpn-tuning.conf` и `/etc/sysctl.d/99-vpn-rps.conf` перемещаются в резервные копии. Это не позволяет им перезаписать защитный профиль после перезагрузки.
 
 ### Отключение IPv6
 
@@ -152,7 +156,7 @@ chmod +x bootstrap.sh
 - `net.core.optmem_max=4194304`
 - `net.core.netdev_max_backlog=250000`
 - `net.core.netdev_budget=600`
-- `net.core.netdev_budget_usecs=4000`
+- `net.core.netdev_budget_usecs=8000`
 - `net.core.somaxconn=32768`
 - `net.core.rps_sock_flow_entries=32768`
 - `net.ipv4.tcp_fastopen=3`
