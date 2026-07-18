@@ -4,10 +4,11 @@ set -euo pipefail
 
 VPN_PRIMARY_INTERFACE="${VPN_PRIMARY_INTERFACE:-}"
 VPN_RPS_FLOW_ENTRIES="${VPN_RPS_FLOW_ENTRIES:-32768}"
-VPN_DISABLE_GRO="${VPN_DISABLE_GRO:-1}"
+VPN_DISABLE_GRO="${VPN_DISABLE_GRO:-auto}"
 VPN_FQ_LIMIT="${VPN_FQ_LIMIT:-100000}"
 VPN_FQ_FLOW_LIMIT="${VPN_FQ_FLOW_LIMIT:-1000}"
 VPN_FQ_BUCKETS="${VPN_FQ_BUCKETS:-8192}"
+VPN_SYSFS_NET_ROOT="${VPN_SYSFS_NET_ROOT:-/sys/class/net}"
 
 log() {
   printf '[настройка-сети-vpn] %s\n' "$*"
@@ -21,6 +22,17 @@ require_positive_integer() {
     printf '%s должно быть положительным целым числом, получено: %s\n' "${name}" "${value}" >&2
     exit 1
   fi
+}
+
+require_gro_mode() {
+  case "${VPN_DISABLE_GRO}" in
+    auto|0|1)
+      return
+      ;;
+  esac
+
+  printf 'VPN_DISABLE_GRO должен иметь значение auto, 0 или 1; получено: %s\n' "${VPN_DISABLE_GRO}" >&2
+  exit 1
 }
 
 detect_primary_interface() {
@@ -43,6 +55,30 @@ detect_primary_interface() {
   fi
 
   ip -br link 2>/dev/null | awk '$1 !~ /^(lo|docker|veth|br-|tun|tap|wg)/ && $2 == "UP" { print $1; exit }'
+}
+
+detect_nic_driver() {
+  local iface="$1"
+  local driver_path driver
+
+  driver_path="$(readlink -f "${VPN_SYSFS_NET_ROOT}/${iface}/device/driver" 2>/dev/null || true)"
+  if [[ -n "${driver_path}" ]]; then
+    basename "${driver_path}"
+    return
+  fi
+
+  driver="$(ethtool -i "${iface}" 2>/dev/null | awk -F ': ' '$1 == "driver" { print $2; exit }')"
+  printf '%s\n' "${driver:-неизвестен}"
+}
+
+is_virtio_driver() {
+  case "$1" in
+    virtio|virtio_net|virtio-net)
+      return 0
+      ;;
+  esac
+
+  return 1
 }
 
 build_cpu_mask() {
@@ -77,8 +113,8 @@ apply_rps_rfs() {
   fi
 
   shopt -s nullglob
-  rps_cpu_files=(/sys/class/net/"${iface}"/queues/rx-*/rps_cpus)
-  rps_flow_files=(/sys/class/net/"${iface}"/queues/rx-*/rps_flow_cnt)
+  rps_cpu_files=("${VPN_SYSFS_NET_ROOT}"/"${iface}"/queues/rx-*/rps_cpus)
+  rps_flow_files=("${VPN_SYSFS_NET_ROOT}"/"${iface}"/queues/rx-*/rps_flow_cnt)
   shopt -u nullglob
 
   if (( ${#rps_cpu_files[@]} == 0 || ${#rps_flow_files[@]} == 0 )); then
@@ -104,13 +140,34 @@ apply_rps_rfs() {
   log "RPS/RFS включён на ${iface}: ядра=${cpu_count} маска=${cpu_mask} потоки=${VPN_RPS_FLOW_ENTRIES}/${per_queue}"
 }
 
-disable_gro() {
+configure_gro() {
   local iface="$1"
+  local driver="$2"
+  local disable_gro=0
 
-  if [[ "${VPN_DISABLE_GRO}" != "1" ]]; then
-    log "Изменение GRO отключено в конфигурации"
-    return
-  fi
+  case "${VPN_DISABLE_GRO}" in
+    auto)
+      if is_virtio_driver "${driver}"; then
+        disable_gro=1
+        log "Обнаружен virtio: GRO будет отключён для стабильности"
+      else
+        log "GRO оставлен без изменений: драйвер ${driver} не относится к virtio"
+      fi
+      ;;
+    1)
+      disable_gro=1
+      log "Отключение GRO принудительно включено в конфигурации"
+      ;;
+    0)
+      log "Изменение GRO принудительно отключено в конфигурации"
+      ;;
+    *)
+      printf 'VPN_DISABLE_GRO должен иметь значение auto, 0 или 1; получено: %s\n' "${VPN_DISABLE_GRO}" >&2
+      exit 1
+      ;;
+  esac
+
+  (( disable_gro == 1 )) || return
 
   if ethtool -K "${iface}" gro off >/dev/null 2>&1; then
     log "GRO отключён на ${iface}"
@@ -144,7 +201,7 @@ apply_fq() {
   local parents=()
 
   shopt -s nullglob
-  tx_queues=(/sys/class/net/"${iface}"/queues/tx-*)
+  tx_queues=("${VPN_SYSFS_NET_ROOT}"/"${iface}"/queues/tx-*)
   shopt -u nullglob
 
   if (( ${#tx_queues[@]} <= 1 )); then
@@ -175,22 +232,28 @@ apply_fq() {
 }
 
 main() {
-  local iface
+  local driver iface
 
   require_positive_integer VPN_RPS_FLOW_ENTRIES "${VPN_RPS_FLOW_ENTRIES}"
   require_positive_integer VPN_FQ_LIMIT "${VPN_FQ_LIMIT}"
   require_positive_integer VPN_FQ_FLOW_LIMIT "${VPN_FQ_FLOW_LIMIT}"
   require_positive_integer VPN_FQ_BUCKETS "${VPN_FQ_BUCKETS}"
+  require_gro_mode
 
   iface="${VPN_PRIMARY_INTERFACE:-$(detect_primary_interface)}"
-  if [[ -z "${iface}" || ! -d "/sys/class/net/${iface}" ]]; then
+  if [[ -z "${iface}" || ! -d "${VPN_SYSFS_NET_ROOT}/${iface}" ]]; then
     printf 'Не удалось определить основной сетевой интерфейс\n' >&2
     exit 1
   fi
 
+  driver="$(detect_nic_driver "${iface}")"
+  log "Основной интерфейс: ${iface}; драйвер: ${driver}"
+
   apply_rps_rfs "${iface}"
-  disable_gro "${iface}"
+  configure_gro "${iface}" "${driver}"
   apply_fq "${iface}"
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
