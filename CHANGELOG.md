@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-18
+
 ### Added
 
 - интерактивный `bootstrap.sh` с вводом hostname, SSH port и публичного SSH key
@@ -23,6 +25,10 @@
 - `LICENSE`
 - опциональный VPN defense profile с auto-tuned conntrack/backlog sysctl и `iptables` hashlimit rules
 - RPS/RFS tuning по всем CPU для RX-очередей основного интерфейса в VPN defense profile
+- обязательный persistent network tuning для VPN-нод через `vpn-node-network-tuning.service`
+- автоматическое отключение GRO и расширенный `fq` для single-queue и multi-queue NIC
+- пакеты `ethtool` и `irqbalance` с автоматическим включением `irqbalance`
+- настраиваемые overrides через `/etc/default/vpn-node-network-tuning`
 
 ### Changed
 
@@ -37,3 +43,6 @@
 - добавлена опциональная установка XanMod LTS kernel с автоопределением `x86-64-v1/v2/v3`
 - при выборе XanMod LTS bootstrap теперь отдельно спрашивает про автоматический reboot после успешной установки
 - README больше не дублирует отдельный быстрый сценарий установки, оставлена одна команда запуска
+- RPS/RFS вынесен из опционального defense profile в базовый профиль каждой VPN-ноды
+- TCP pre-auth очередь SSH увеличена до `MaxStartups 100:30:200`
+- базовые TCP backlog, orphan, FIN и keepalive параметры усилены для кратковременных всплесков нагрузки

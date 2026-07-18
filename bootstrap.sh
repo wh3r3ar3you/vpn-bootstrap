@@ -12,10 +12,9 @@ readonly SSHD_BACKUP="/etc/ssh/sshd_config.bak.bootstrap"
 readonly SYSCTL_IPV6_FILE="/etc/sysctl.d/99-disable-ipv6.conf"
 readonly SYSCTL_TUNING_FILE="/etc/sysctl.d/99-vpn-tuning.conf"
 readonly SYSCTL_DEFENSE_FILE="/etc/sysctl.d/99-vpn-defense.conf"
-readonly SYSCTL_RPS_FILE="/etc/sysctl.d/99-vpn-rps.conf"
 readonly CONNTRACK_MODPROBE_FILE="/etc/modprobe.d/vpn-defense-conntrack.conf"
-readonly RPS_SCRIPT_TARGET="/usr/local/sbin/apply-vpn-rps.sh"
-readonly RPS_SERVICE_TARGET="/etc/systemd/system/vpn-rps.service"
+readonly NETWORK_TUNING_SCRIPT_TARGET="/usr/local/sbin/apply-vpn-network-tuning.sh"
+readonly NETWORK_TUNING_SERVICE_TARGET="/etc/systemd/system/vpn-node-network-tuning.service"
 readonly BLOCKLIST_SET="blacklist"
 readonly IPSET_MAXELEM=500000
 readonly XANMOD_KEYRING="/etc/apt/keyrings/xanmod-archive-keyring.gpg"
@@ -35,10 +34,6 @@ DEFENSE_SYN_BACKLOG=8192
 DEFENSE_NETDEV_BACKLOG=250000
 DEFENSE_SYN_RATE=80
 DEFENSE_SYN_BURST=160
-DEFENSE_RPS_FLOW_TOTAL=0
-DEFENSE_RPS_FLOW_Q=0
-DEFENSE_RPS_CPU_MASK=""
-DEFENSE_RPS_INTERFACE=""
 
 log() {
   printf '[%s] %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*"
@@ -272,7 +267,10 @@ net.core.wmem_default=262144
 net.core.optmem_max=4194304
 
 net.core.netdev_max_backlog=250000
-net.core.somaxconn=8192
+net.core.netdev_budget=600
+net.core.netdev_budget_usecs=4000
+net.core.somaxconn=32768
+net.core.rps_sock_flow_entries=32768
 
 net.ipv4.tcp_fastopen=3
 net.ipv4.tcp_rmem=4096 87380 67108864
@@ -281,12 +279,17 @@ net.ipv4.tcp_mtu_probing=1
 net.ipv4.tcp_slow_start_after_idle=0
 net.ipv4.tcp_notsent_lowat=16384
 net.ipv4.tcp_tw_reuse=1
+net.ipv4.tcp_max_orphans=262144
+net.ipv4.tcp_fin_timeout=30
+net.ipv4.tcp_keepalive_time=600
+net.ipv4.tcp_keepalive_intvl=30
+net.ipv4.tcp_keepalive_probes=5
 
 net.ipv4.udp_rmem_min=8192
 net.ipv4.udp_wmem_min=8192
 
 net.ipv4.ip_local_port_range=1024 65535
-net.ipv4.tcp_max_syn_backlog=8192
+net.ipv4.tcp_max_syn_backlog=32768
 
 net.netfilter.nf_conntrack_max=1048576
 net.netfilter.nf_conntrack_tcp_timeout_established=7440
@@ -328,99 +331,39 @@ calculate_vpn_defense_tuning() {
     DEFENSE_NETDEV_BACKLOG=1000000
     DEFENSE_SYN_RATE=300
     DEFENSE_SYN_BURST=600
-    DEFENSE_RPS_FLOW_TOTAL=262144
-    DEFENSE_RPS_FLOW_Q=16384
   elif (( nproc >= 16 )); then
     DEFENSE_SOMAXCONN=262144
     DEFENSE_SYN_BACKLOG=262144
     DEFENSE_NETDEV_BACKLOG=500000
     DEFENSE_SYN_RATE=200
     DEFENSE_SYN_BURST=400
-    DEFENSE_RPS_FLOW_TOTAL=131072
-    DEFENSE_RPS_FLOW_Q=8192
   elif (( nproc >= 8 )); then
     DEFENSE_SOMAXCONN=131072
     DEFENSE_SYN_BACKLOG=131072
     DEFENSE_NETDEV_BACKLOG=300000
     DEFENSE_SYN_RATE=120
     DEFENSE_SYN_BURST=240
-    DEFENSE_RPS_FLOW_TOTAL=65536
-    DEFENSE_RPS_FLOW_Q=8192
   elif (( nproc >= 4 )); then
     DEFENSE_SOMAXCONN=65535
     DEFENSE_SYN_BACKLOG=65535
     DEFENSE_NETDEV_BACKLOG=250000
     DEFENSE_SYN_RATE=80
     DEFENSE_SYN_BURST=160
-    DEFENSE_RPS_FLOW_TOTAL=32768
-    DEFENSE_RPS_FLOW_Q=4096
   elif (( nproc >= 2 )); then
     DEFENSE_SOMAXCONN=32768
     DEFENSE_SYN_BACKLOG=32768
     DEFENSE_NETDEV_BACKLOG=100000
     DEFENSE_SYN_RATE=60
     DEFENSE_SYN_BURST=120
-    DEFENSE_RPS_FLOW_TOTAL=16384
-    DEFENSE_RPS_FLOW_Q=4096
   else
     DEFENSE_SOMAXCONN=16384
     DEFENSE_SYN_BACKLOG=16384
     DEFENSE_NETDEV_BACKLOG=50000
     DEFENSE_SYN_RATE=60
     DEFENSE_SYN_BURST=120
-    DEFENSE_RPS_FLOW_TOTAL=0
-    DEFENSE_RPS_FLOW_Q=0
   fi
 
-  DEFENSE_RPS_CPU_MASK="$(build_cpu_mask "${nproc}")"
-
-  log "VPN defense auto-tune: nproc=${nproc} ram=${ram_gb}G ct_max=${DEFENSE_CT_MAX} buckets=${DEFENSE_CT_BUCKETS} somaxconn=${DEFENSE_SOMAXCONN} syn_backlog=${DEFENSE_SYN_BACKLOG} netdev_backlog=${DEFENSE_NETDEV_BACKLOG} rps_mask=${DEFENSE_RPS_CPU_MASK} rps_flow=${DEFENSE_RPS_FLOW_TOTAL}/${DEFENSE_RPS_FLOW_Q}"
-}
-
-build_cpu_mask() {
-  local cpus="$1"
-  local full_chunks remainder i
-  local chunks=()
-
-  if (( cpus <= 0 )); then
-    printf '0\n'
-    return
-  fi
-
-  full_chunks=$(( cpus / 32 ))
-  remainder=$(( cpus % 32 ))
-
-  if (( remainder > 0 )); then
-    chunks+=("$(printf '%x' "$(( (1 << remainder) - 1 ))")")
-  fi
-
-  for (( i = 0; i < full_chunks; i++ )); do
-    chunks+=("ffffffff")
-  done
-
-  (IFS=,; printf '%s\n' "${chunks[*]}")
-}
-
-detect_primary_interface() {
-  local iface
-
-  iface="$(ip route get 1.1.1.1 2>/dev/null | awk '
-    /dev/ {
-      for (i = 1; i <= NF; i++) {
-        if ($i == "dev") {
-          print $(i + 1)
-          exit
-        }
-      }
-    }
-  ')"
-
-  if [[ -n "${iface}" ]]; then
-    printf '%s\n' "${iface}"
-    return
-  fi
-
-  ip -br link 2>/dev/null | awk '$1 !~ /^(lo|docker|veth|br-|tun|tap|wg)/ && $2 == "UP" { print $1; exit }'
+  log "VPN defense auto-tune: nproc=${nproc} ram=${ram_gb}G ct_max=${DEFENSE_CT_MAX} buckets=${DEFENSE_CT_BUCKETS} somaxconn=${DEFENSE_SOMAXCONN} syn_backlog=${DEFENSE_SYN_BACKLOG} netdev_backlog=${DEFENSE_NETDEV_BACKLOG}"
 }
 
 apply_conntrack_hashsize() {
@@ -456,115 +399,19 @@ EOF
   sysctl -e -p "${SYSCTL_DEFENSE_FILE}" >/dev/null
 }
 
-configure_vpn_rps_rfs() {
-  local queue
+configure_vpn_network_tuning() {
+  local repo_root
+  repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-  if [[ "${INSTALL_VPN_DEFENSE}" -ne 1 ]]; then
-    return
-  fi
+  log "Installing persistent VPN network tuning"
+  install -m 755 "${repo_root}/scripts/apply-vpn-network-tuning.sh" "${NETWORK_TUNING_SCRIPT_TARGET}"
+  install -m 644 "${repo_root}/systemd/vpn-node-network-tuning.service" "${NETWORK_TUNING_SERVICE_TARGET}"
 
-  if [[ "${DEFENSE_RPS_FLOW_TOTAL}" -le 0 || "${DEFENSE_RPS_FLOW_Q}" -le 0 ]]; then
-    log "Skipping RPS/RFS: single CPU or unsupported tuning profile"
-    return
-  fi
-
-  DEFENSE_RPS_INTERFACE="$(detect_primary_interface)"
-  if [[ -z "${DEFENSE_RPS_INTERFACE}" ]]; then
-    log "Skipping RPS/RFS: unable to detect primary network interface"
-    return
-  fi
-
-  if ! compgen -G "/sys/class/net/${DEFENSE_RPS_INTERFACE}/queues/rx-*/rps_cpus" >/dev/null; then
-    log "Skipping RPS/RFS: no RX queues found for ${DEFENSE_RPS_INTERFACE}"
-    return
-  fi
-
-  log "Configuring RPS/RFS on ${DEFENSE_RPS_INTERFACE}: mask=${DEFENSE_RPS_CPU_MASK} flow_entries=${DEFENSE_RPS_FLOW_TOTAL} per_queue=${DEFENSE_RPS_FLOW_Q}"
-
-  for queue in /sys/class/net/"${DEFENSE_RPS_INTERFACE}"/queues/rx-*/rps_cpus; do
-    [[ -w "${queue}" ]] && printf '%s\n' "${DEFENSE_RPS_CPU_MASK}" > "${queue}"
-  done
-
-  printf '%s\n' "${DEFENSE_RPS_FLOW_TOTAL}" > /proc/sys/net/core/rps_sock_flow_entries 2>/dev/null || true
-
-  for queue in /sys/class/net/"${DEFENSE_RPS_INTERFACE}"/queues/rx-*/rps_flow_cnt; do
-    [[ -w "${queue}" ]] && printf '%s\n' "${DEFENSE_RPS_FLOW_Q}" > "${queue}"
-  done
-
-  cat <<EOF > "${SYSCTL_RPS_FILE}"
-# Auto-tuned RPS/RFS flow table for VPN defense profile.
-net.core.rps_sock_flow_entries=${DEFENSE_RPS_FLOW_TOTAL}
-EOF
-
-  install -d -m 755 "$(dirname "${RPS_SCRIPT_TARGET}")"
-  cat <<EOF > "${RPS_SCRIPT_TARGET}"
-#!/usr/bin/env bash
-set -euo pipefail
-
-readonly RPS_CPU_MASK="${DEFENSE_RPS_CPU_MASK}"
-readonly RPS_FLOW_TOTAL="${DEFENSE_RPS_FLOW_TOTAL}"
-readonly RPS_FLOW_Q="${DEFENSE_RPS_FLOW_Q}"
-
-detect_primary_interface() {
-  local iface
-
-  iface="\$(ip route get 1.1.1.1 2>/dev/null | awk '
-    /dev/ {
-      for (i = 1; i <= NF; i++) {
-        if (\$i == "dev") {
-          print \$(i + 1)
-          exit
-        }
-      }
-    }
-  ')"
-
-  if [[ -n "\${iface}" ]]; then
-    printf '%s\n' "\${iface}"
-    return
-  fi
-
-  ip -br link 2>/dev/null | awk '\$1 !~ /^(lo|docker|veth|br-|tun|tap|wg)/ && \$2 == "UP" { print \$1; exit }'
-}
-
-main() {
-  local iface queue
-
-  iface="\$(detect_primary_interface)"
-  [[ -n "\${iface}" ]] || exit 0
-
-  for queue in /sys/class/net/"\${iface}"/queues/rx-*/rps_cpus; do
-    [[ -w "\${queue}" ]] && printf '%s\n' "\${RPS_CPU_MASK}" > "\${queue}"
-  done
-
-  printf '%s\n' "\${RPS_FLOW_TOTAL}" > /proc/sys/net/core/rps_sock_flow_entries 2>/dev/null || true
-
-  for queue in /sys/class/net/"\${iface}"/queues/rx-*/rps_flow_cnt; do
-    [[ -w "\${queue}" ]] && printf '%s\n' "\${RPS_FLOW_Q}" > "\${queue}"
-  done
-}
-
-main "\$@"
-EOF
-  chmod 755 "${RPS_SCRIPT_TARGET}"
-
-  cat <<EOF > "${RPS_SERVICE_TARGET}"
-[Unit]
-Description=Apply VPN RPS/RFS tuning to NIC RX queues
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=${RPS_SCRIPT_TARGET}
-RemainAfterExit=yes
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
+  # Disable the superseded service when upgrading a node bootstrapped by an older release.
+  systemctl disable --now vpn-rps.service >/dev/null 2>&1 || true
   systemctl daemon-reload
-  systemctl enable --now "$(basename "${RPS_SERVICE_TARGET}")" >/dev/null
+  systemctl enable --now irqbalance >/dev/null
+  systemctl enable --now "$(basename "${NETWORK_TUNING_SERVICE_TARGET}")" >/dev/null
 }
 
 update_system() {
@@ -590,6 +437,8 @@ install_packages() {
     ca-certificates \
     gnupg \
     kmod \
+    ethtool \
+    irqbalance \
     iproute2 \
     lsb-release \
     openssh-server \
@@ -811,6 +660,7 @@ configure_ssh() {
       desired["ClientAliveCountMax"] = "2"
       desired["MaxAuthTries"] = "3"
       desired["LoginGraceTime"] = "30"
+      desired["MaxStartups"] = "100:30:200"
     }
     /^[[:space:]]*Match[[:space:]]+/ {
       emit_missing()
@@ -1019,11 +869,9 @@ print_summary() {
     printf '  somaxconn: %s\n' "${DEFENSE_SOMAXCONN}"
     printf '  tcp_max_syn_backlog: %s\n' "${DEFENSE_SYN_BACKLOG}"
     printf '  netdev_max_backlog: %s\n' "${DEFENSE_NETDEV_BACKLOG}"
-    if [[ -n "${DEFENSE_RPS_INTERFACE}" ]]; then
-      printf '  RPS/RFS: interface=%s mask=%s flow_entries=%s per_queue=%s\n' "${DEFENSE_RPS_INTERFACE}" "${DEFENSE_RPS_CPU_MASK}" "${DEFENSE_RPS_FLOW_TOTAL}" "${DEFENSE_RPS_FLOW_Q}"
-    fi
     printf '  SYN hashlimit: %s/sec burst %s on 80,443,8443\n\n' "${DEFENSE_SYN_RATE}" "${DEFENSE_SYN_BURST}"
   fi
+  printf 'VPN network tuning service: %s\n\n' "$(systemctl is-active vpn-node-network-tuning.service 2>/dev/null || true)"
   if [[ "${INSTALL_XANMOD_LTS}" -eq 1 ]]; then
     printf 'XanMod LTS was requested. Reboot is required to activate the new kernel.\n'
     printf 'Automatic reboot: %s\n\n' "$([[ "${AUTO_REBOOT_AFTER_BOOTSTRAP}" -eq 1 ]] && printf 'yes' || printf 'no')"
@@ -1061,8 +909,8 @@ main() {
   configure_sysctl
   update_system
   install_packages
+  configure_vpn_network_tuning
   configure_vpn_defense_sysctl
-  configure_vpn_rps_rfs
   require_command curl
   require_command iptables
   require_command ipset

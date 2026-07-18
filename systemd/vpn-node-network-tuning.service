@@ -1,0 +1,14 @@
+[Unit]
+Description=Apply VPN node NIC and queue tuning
+After=network-online.target
+Wants=network-online.target
+Before=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/default/vpn-node-network-tuning
+ExecStart=/usr/local/sbin/apply-vpn-network-tuning.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

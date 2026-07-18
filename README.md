@@ -1,8 +1,12 @@
-# init-vpn-node
+# vpn-bootstrap
 
 🚀 Первичная конфигурация для VPN-ноды на Debian/Ubuntu.
 
-Скрипт поднимает базовую конфигурацию сервера, настраивает SSH, ставит Docker, Zsh-окружение, Speedtest CLI, firewall и отдельный механизм ежедневного обновления blocklist через `ipset` + `systemd timer`.
+## О проекте
+
+`vpn-bootstrap` — практичный opinionated bootstrap для выделенных VPN-нод. Он готовит чистый Debian/Ubuntu к высокой сетевой нагрузке, настраивает ядро и NIC, SSH, Docker, firewall и ежедневное атомарное обновление Traffic Guard blocklist.
+
+Профиль рассчитан прежде всего на VPS с `virtio` и небольшим числом аппаратных очередей: входящий поток распределяется по CPU, очереди TCP и `fq` увеличиваются, а проблемный GRO по умолчанию отключается. Все изменения переживают перезагрузку.
 
 ## ✨ Что делает проект
 
@@ -15,7 +19,8 @@
 - Oh My Zsh, Powerlevel10k и плагины для `root`
 - Speedtest CLI
 - sysctl-настройки для VPN-сценария
-- опциональный VPN defense profile с auto-tuned conntrack/backlog, RPS/RFS и `iptables` rate limits
+- постоянный NIC tuning с RPS/RFS, увеличенным `fq`, отключением GRO и `irqbalance`
+- опциональный VPN defense profile с auto-tuned conntrack/backlog и `iptables` rate limits
 - интерактивную настройку hostname, SSH port и `root` SSH key
 - Traffic Guard blacklist на базе `ipset` + `iptables`
 - ежедневное безопасное обновление blocklist через `systemd timer`
@@ -32,7 +37,9 @@
 
 - `bootstrap.sh` — основной bootstrap-скрипт
 - `install.sh` — one-line installer для быстрого запуска с GitHub
+- `scripts/apply-vpn-network-tuning.sh` — применение NIC, RPS/RFS и `fq` tuning
 - `scripts/update-traffic-guard.sh` — updater blocklist для ручного и автоматического запуска
+- `systemd/vpn-node-network-tuning.service` — восстановление сетевых настроек после reboot
 - `systemd/traffic-guard-update.service` — `systemd service` для обновления
 - `systemd/traffic-guard-update.timer` — ежедневный `systemd timer`
 - `README.md` — документация проекта
@@ -84,8 +91,10 @@ chmod +x bootstrap.sh
 - применяет sysctl через `sysctl -e -p`, чтобы неизвестные ключи старого ядра не ломали bootstrap
 - выполняет `apt-get update` и `apt-get -y upgrade`
 - проверяет apt-пакеты и устанавливает только отсутствующие через `apt-get`
-- опционально пишет `/etc/sysctl.d/99-vpn-defense.conf`, `/etc/sysctl.d/99-vpn-rps.conf` и `/etc/modprobe.d/vpn-defense-conntrack.conf`
-- опционально включает RPS/RFS на RX-очередях основного сетевого интерфейса и ставит `/usr/local/sbin/apply-vpn-rps.sh` + `vpn-rps.service` для применения после reboot
+- всегда ставит `ethtool` и `irqbalance`, включает распределение аппаратных IRQ
+- определяет основной внешний интерфейс и ставит `/usr/local/sbin/apply-vpn-network-tuning.sh` + `vpn-node-network-tuning.service`
+- включает RPS/RFS по всем CPU, увеличивает `fq` и отключает GRO; на multi-queue NIC сохраняет корневой `mq` и меняет только дочерние очереди
+- опционально пишет `/etc/sysctl.d/99-vpn-defense.conf` и `/etc/modprobe.d/vpn-defense-conntrack.conf`
 - опционально добавляет официальный XanMod APT repo и ставит `linux-xanmod-lts-x64v1/v2/v3` по уровню CPU
 - если XanMod выбран и пользователь подтвердил auto reboot, перезагружает сервер после успешного завершения
 - устанавливает и включает Docker
@@ -94,7 +103,7 @@ chmod +x bootstrap.sh
 - при необходимости ставит `openssh-server` до изменения `sshd_config`
 - создаёт `/root/.ssh` и `/root/.ssh/authorized_keys` с корректными правами
 - добавляет переданный публичный SSH key без затирания уже существующих ключей
-- обновляет `/etc/ssh/sshd_config`, включает key-only root login, отключает password login, валидирует конфиг через `sshd -t` и только потом перезапускает SSH
+- обновляет `/etc/ssh/sshd_config`, включает key-only root login, отключает password login, увеличивает pre-auth очередь до `MaxStartups 100:30:200`, валидирует конфиг через `sshd -t` и только потом перезапускает SSH
 - устанавливает updater в `/usr/local/sbin/update-traffic-guard.sh`
 - устанавливает и включает `traffic-guard-update.service` и `traffic-guard-update.timer`
 - гарантирует наличие правил `DROP`/`REJECT` для `ipset blacklist` во входящем, исходящем и forwarded-трафике
@@ -141,7 +150,10 @@ Bootstrap записывает два файла:
 - `net.core.wmem_default=262144`
 - `net.core.optmem_max=4194304`
 - `net.core.netdev_max_backlog=250000`
-- `net.core.somaxconn=8192`
+- `net.core.netdev_budget=600`
+- `net.core.netdev_budget_usecs=4000`
+- `net.core.somaxconn=32768`
+- `net.core.rps_sock_flow_entries=32768`
 - `net.ipv4.tcp_fastopen=3`
 - `net.ipv4.tcp_rmem=4096 87380 67108864`
 - `net.ipv4.tcp_wmem=4096 65536 67108864`
@@ -149,10 +161,15 @@ Bootstrap записывает два файла:
 - `net.ipv4.tcp_slow_start_after_idle=0`
 - `net.ipv4.tcp_notsent_lowat=16384`
 - `net.ipv4.tcp_tw_reuse=1`
+- `net.ipv4.tcp_max_orphans=262144`
+- `net.ipv4.tcp_fin_timeout=30`
+- `net.ipv4.tcp_keepalive_time=600`
+- `net.ipv4.tcp_keepalive_intvl=30`
+- `net.ipv4.tcp_keepalive_probes=5`
 - `net.ipv4.udp_rmem_min=8192`
 - `net.ipv4.udp_wmem_min=8192`
 - `net.ipv4.ip_local_port_range=1024 65535`
-- `net.ipv4.tcp_max_syn_backlog=8192`
+- `net.ipv4.tcp_max_syn_backlog=32768`
 - `net.netfilter.nf_conntrack_max=1048576`
 - `net.netfilter.nf_conntrack_tcp_timeout_established=7440`
 - `net.netfilter.nf_conntrack_udp_timeout=60`
@@ -168,13 +185,37 @@ Bootstrap записывает два файла:
 - `rmem_max` и `wmem_max` увеличивают максимальные размеры receive/send buffer в ядре.
 - `rmem_default` и `wmem_default` задают базовые значения буферов сокетов.
 - `netdev_max_backlog=250000` увеличивает размер очереди входящих пакетов в ядре при высокой нагрузке.
-- `somaxconn=8192` увеличивает верхнюю границу очереди ожидающих TCP-соединений.
+- `somaxconn=32768` и `tcp_max_syn_backlog=32768` увеличивают очереди новых соединений и уменьшают вероятность кратковременных RST под всплеском нагрузки.
+- `tcp_max_orphans`, `tcp_fin_timeout` и keepalive-параметры быстрее очищают зависшие TCP-сессии, не обрывая живые соединения слишком агрессивно.
 - `tcp_fastopen=3` включает TCP Fast Open и для клиента, и для сервера.
 - `tcp_rmem` и `tcp_wmem` расширяют диапазоны автонастройки TCP-буферов.
 - `tcp_mtu_probing=1` включает MTU probing, что помогает переживать проблемы с path MTU и blackhole-сценарии.
 - `nf_conntrack_*` увеличивает таблицу conntrack и сокращает слишком длинные таймауты для VPN/exit-нагрузки.
 
 Итог: после установки сервер получает более агрессивный и практичный сетевой профиль под VPN/туннельную нагрузку, а не дефолтные conservative-настройки дистрибутива.
+
+## NIC, RPS/RFS и fq
+
+`vpn-node-network-tuning.service` запускается после появления сети и при каждой загрузке:
+
+- находит основной интерфейс через default route
+- включает RPS на всех доступных CPU и RFS flow table на `32768` записей
+- отключает `gro` и `rx-gro-hw`, если драйвер позволяет это сделать
+- ставит `fq` с `limit 100000`, `flow_limit 1000` и `buckets 8192`
+- не уничтожает корневой `mq` на многоочередной NIC, а применяет `fq` отдельно к каждой TX-очереди
+
+Настройки можно переопределить в `/etc/default/vpn-node-network-tuning`:
+
+```bash
+VPN_PRIMARY_INTERFACE=ens3
+VPN_RPS_FLOW_ENTRIES=32768
+VPN_DISABLE_GRO=1
+VPN_FQ_LIMIT=100000
+VPN_FQ_FLOW_LIMIT=1000
+VPN_FQ_BUCKETS=8192
+```
+
+На качественной аппаратной NIC GRO может дать больше максимальной пропускной способности ценой более крупных пачек пакетов. В таком случае достаточно установить `VPN_DISABLE_GRO=0` и перезапустить `vpn-node-network-tuning.service`.
 
 ## 🛡 VPN defense profile
 
@@ -183,13 +224,10 @@ VPN defense profile выключен по умолчанию и включает
 Если выбрать `yes`, bootstrap:
 
 - считает RAM и CPU count
-- подбирает `nf_conntrack_max`, conntrack hash buckets, `somaxconn`, `tcp_max_syn_backlog`, `netdev_max_backlog` и RPS/RFS flow table
+- подбирает `nf_conntrack_max`, conntrack hash buckets, `somaxconn`, `tcp_max_syn_backlog` и `netdev_max_backlog`
 - пишет `/etc/sysctl.d/99-vpn-defense.conf`
-- пишет `/etc/sysctl.d/99-vpn-rps.conf`
 - пишет `/etc/modprobe.d/vpn-defense-conntrack.conf` для conntrack hashsize после reboot
 - применяет доступные sysctl сразу через `sysctl -e -p`
-- находит основной сетевой интерфейс и пишет CPU-mask во все `/sys/class/net/<iface>/queues/rx-*/rps_cpus`
-- пишет `rps_flow_cnt` для RX-очередей и включает `/usr/local/sbin/apply-vpn-rps.sh` через `vpn-rps.service`, чтобы настройки вернулись после reboot
 - создаёт или пересоздаёт chains `VPN_SYN_LIM` и `VPN_UDP_AMP`
 - добавляет в `INPUT` только правила с comment `vpn-defense`
 - ограничивает TCP SYN на `80,443,8443` через `hashlimit` per source IP
