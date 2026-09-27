@@ -3,6 +3,7 @@
 set -euo pipefail
 
 readonly DEFAULT_SSH_PORT=22
+readonly DEFAULT_PANEL_API_PORT=2222
 readonly BLOCKLIST_DIR="/opt/blocklists"
 readonly UPDATE_SCRIPT_TARGET="/usr/local/sbin/update-traffic-guard.sh"
 readonly SERVICE_TARGET="/etc/systemd/system/traffic-guard-update.service"
@@ -21,10 +22,18 @@ readonly BLOCKLIST_SET="blacklist"
 readonly IPSET_MAXELEM=500000
 readonly XANMOD_KEYRING="/etc/apt/keyrings/xanmod-archive-keyring.gpg"
 readonly XANMOD_SOURCE_LIST="/etc/apt/sources.list.d/xanmod-release.list"
+readonly PANEL_ACCESS_CONFIG="/etc/default/vpn-panel-access"
+readonly PANEL_ACCESS_SCRIPT_TARGET="/usr/local/sbin/update-panel-access.sh"
+readonly PANEL_ACCESS_SERVICE_TARGET="/etc/systemd/system/vpn-panel-access.service"
+readonly PANEL_ACCESS_TIMER_TARGET="/etc/systemd/system/vpn-panel-access.timer"
 
 HOSTNAME_VALUE=""
 SSH_PORT_VALUE="${DEFAULT_SSH_PORT}"
 SSH_KEY_VALUE=""
+SSH_KEY_ONLY=1
+PANEL_ADDRESS_VALUE=""
+PANEL_API_PORT_VALUE=""
+PRESET_ANSWER=0
 INSTALL_VPN_DEFENSE=0
 INSTALL_XANMOD_LTS=0
 AUTO_REBOOT_AFTER_BOOTSTRAP=0
@@ -100,12 +109,50 @@ detect_ssh_service() {
   exit 1
 }
 
+# Ответ берётся из переменной окружения BS_*, если она задана (даже пустой),
+# иначе спрашивается интерактивно. Так сценарий можно запускать без вопросов.
+read_answer() {
+  local __target="$1" __env="$2" __prompt="$3"
+
+  if [[ -n "${!__env+set}" ]]; then
+    printf -v "${__target}" '%s' "${!__env}"
+    PRESET_ANSWER=1
+    printf '%s%s (из %s)\n' "${__prompt}" "${!__env}" "${__env}"
+    return
+  fi
+
+  PRESET_ANSWER=0
+  # shellcheck disable=SC2229
+  read -r -p "${__prompt}" "${__target}"
+}
+
+reject_answer() {
+  printf '%s\n' "$1" >&2
+  if [[ "${PRESET_ANSWER}" -eq 1 ]]; then
+    exit 1
+  fi
+}
+
+is_yes_answer() {
+  case "$1" in
+    y|Y|yes|YES|д|Д|да|Да|ДА|1) return 0 ;;
+  esac
+  return 1
+}
+
+is_no_answer() {
+  case "$1" in
+    n|N|no|NO|н|Н|нет|Нет|НЕТ|0) return 0 ;;
+  esac
+  return 1
+}
+
 ask_hostname() {
   local current_hostname input
   current_hostname="$(hostnamectl --static 2>/dev/null || hostnamectl hostname 2>/dev/null || hostname)"
 
   while true; do
-    read -r -p "Введите имя узла [${current_hostname}]: " input
+    read_answer input BS_HOSTNAME "Введите имя узла [${current_hostname}]: "
     input="${input:-${current_hostname}}"
 
     if [[ "${input}" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]{0,252}$ ]] && [[ "${input}" != *..* ]]; then
@@ -113,7 +160,7 @@ ask_hostname() {
       return
     fi
 
-    printf 'Некорректное имя узла. Используйте латинские буквы, цифры, точки и дефисы.\n' >&2
+    reject_answer 'Некорректное имя узла. Используйте латинские буквы, цифры, точки и дефисы.'
   done
 }
 
@@ -121,7 +168,7 @@ ask_ssh_port() {
   local input
 
   while true; do
-    read -r -p "Введите порт SSH [${DEFAULT_SSH_PORT}]: " input
+    read_answer input BS_SSH_PORT "Введите порт SSH [${DEFAULT_SSH_PORT}]: "
     input="${input:-${DEFAULT_SSH_PORT}}"
 
     if [[ "${input}" =~ ^[0-9]+$ ]] && (( input >= 1 && input <= 65535 )); then
@@ -129,7 +176,7 @@ ask_ssh_port() {
       return
     fi
 
-    printf 'Некорректный порт SSH. Введите число от 1 до 65535.\n' >&2
+    reject_answer 'Некорректный порт SSH. Введите число от 1 до 65535.'
   done
 }
 
@@ -137,7 +184,13 @@ ask_ssh_key() {
   local input key_type
 
   while true; do
-    read -r -p "Введите открытый ключ SSH для добавления в /root/.ssh/authorized_keys: " input
+    read_answer input BS_SSH_KEY "Введите открытый ключ SSH для добавления в /root/.ssh/authorized_keys [Enter — пропустить]: "
+
+    if [[ -z "${input}" ]]; then
+      SSH_KEY_VALUE=""
+      printf 'Добавление ключа SSH пропущено.\n'
+      return
+    fi
 
     key_type="${input%% *}"
     if [[ "${input}" =~ ^(ssh-ed25519|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521|sk-ssh-ed25519@openssh.com|sk-ecdsa-sha2-nistp256@openssh.com|ssh-rsa)[[:space:]][A-Za-z0-9+/=]+([[:space:]].*)?$ ]]; then
@@ -148,7 +201,7 @@ ask_ssh_key() {
       return
     fi
 
-    printf 'Некорректный открытый ключ SSH. Вставьте одну строку ключа OpenSSH.\n' >&2
+    reject_answer 'Некорректный открытый ключ SSH. Вставьте одну строку ключа OpenSSH или оставьте пустым.'
   done
 }
 
@@ -156,21 +209,19 @@ ask_vpn_defense() {
   local input
 
   while true; do
-    read -r -p "Установить защитный профиль VPN с автоматической настройкой conntrack, очередей и ограничений iptables? [д/Н]: " input
+    read_answer input BS_VPN_DEFENSE "Установить защитный профиль VPN с автоматической настройкой conntrack, очередей и ограничений iptables? [д/Н]: "
     input="${input:-n}"
 
-    case "${input}" in
-      y|Y|yes|YES|д|Д|да|Да|ДА)
-        INSTALL_VPN_DEFENSE=1
-        return
-        ;;
-      n|N|no|NO|н|Н|нет|Нет|НЕТ)
-        INSTALL_VPN_DEFENSE=0
-        return
-        ;;
-    esac
+    if is_yes_answer "${input}"; then
+      INSTALL_VPN_DEFENSE=1
+      return
+    fi
+    if is_no_answer "${input}"; then
+      INSTALL_VPN_DEFENSE=0
+      return
+    fi
 
-    printf 'Введите д или н.\n' >&2
+    reject_answer 'Введите д или н.'
   done
 }
 
@@ -178,21 +229,19 @@ ask_xanmod_lts() {
   local input
 
   while true; do
-    read -r -p "Установить ядро XanMod LTS после настройки пакетов? [д/Н]: " input
+    read_answer input BS_XANMOD "Установить ядро XanMod LTS после настройки пакетов? [д/Н]: "
     input="${input:-n}"
 
-    case "${input}" in
-      y|Y|yes|YES|д|Д|да|Да|ДА)
-        INSTALL_XANMOD_LTS=1
-        return
-        ;;
-      n|N|no|NO|н|Н|нет|Нет|НЕТ)
-        INSTALL_XANMOD_LTS=0
-        return
-        ;;
-    esac
+    if is_yes_answer "${input}"; then
+      INSTALL_XANMOD_LTS=1
+      return
+    fi
+    if is_no_answer "${input}"; then
+      INSTALL_XANMOD_LTS=0
+      return
+    fi
 
-    printf 'Введите д или н.\n' >&2
+    reject_answer 'Введите д или н.'
   done
 }
 
@@ -205,21 +254,95 @@ ask_xanmod_reboot() {
   fi
 
   while true; do
-    read -r -p "Перезагрузить сервер после завершения, чтобы активировать XanMod? [д/Н]: " input
+    read_answer input BS_REBOOT "Перезагрузить сервер после завершения, чтобы активировать XanMod? [д/Н]: "
     input="${input:-n}"
 
-    case "${input}" in
-      y|Y|yes|YES|д|Д|да|Да|ДА)
-        AUTO_REBOOT_AFTER_BOOTSTRAP=1
-        return
-        ;;
-      n|N|no|NO|н|Н|нет|Нет|НЕТ)
-        AUTO_REBOOT_AFTER_BOOTSTRAP=0
-        return
-        ;;
-    esac
+    if is_yes_answer "${input}"; then
+      AUTO_REBOOT_AFTER_BOOTSTRAP=1
+      return
+    fi
+    if is_no_answer "${input}"; then
+      AUTO_REBOOT_AFTER_BOOTSTRAP=0
+      return
+    fi
 
-    printf 'Введите д или н.\n' >&2
+    reject_answer 'Введите д или н.'
+  done
+}
+
+is_panel_address_token() {
+  local token="$1" octet
+  local -a octets
+
+  if [[ "${token}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}(/([0-9]|[12][0-9]|3[0-2]))?$ ]]; then
+    IFS=. read -r -a octets <<< "${token%%/*}"
+    for octet in "${octets[@]}"; do
+      (( 10#${octet} <= 255 )) || return 1
+    done
+    return 0
+  fi
+
+  if [[ "${token}" == *:* ]]; then
+    [[ "${token}" =~ ^[0-9A-Fa-f:.]+(/([0-9]|[1-9][0-9]|1[01][0-9]|12[0-8]))?$ ]]
+    return
+  fi
+
+  [[ "${token}" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}\.?$ ]]
+}
+
+ask_panel_address() {
+  local input token valid
+  local -a tokens=()
+
+  while true; do
+    read_answer input BS_PANEL_ADDRESS "Адрес панели Remnawave (IP, подсеть или домен; несколько — через запятую) [Enter — пропустить]: "
+    input="${input//,/ }"
+    read -r -a tokens <<< "${input}"
+
+    if [[ ${#tokens[@]} -eq 0 ]]; then
+      PANEL_ADDRESS_VALUE=""
+      printf 'Ограничение доступа к API ноды пропущено.\n'
+      return
+    fi
+
+    valid=1
+    for token in "${tokens[@]}"; do
+      if ! is_panel_address_token "${token}"; then
+        valid=0
+        reject_answer "Некорректный адрес панели: ${token}"
+        break
+      fi
+    done
+
+    if [[ "${valid}" -eq 1 ]]; then
+      PANEL_ADDRESS_VALUE="${tokens[*]}"
+      return
+    fi
+  done
+}
+
+ask_panel_api_port() {
+  local input
+
+  if [[ -z "${PANEL_ADDRESS_VALUE}" ]]; then
+    PANEL_API_PORT_VALUE=""
+    return
+  fi
+
+  while true; do
+    read_answer input BS_PANEL_API_PORT "Порт API ноды (NODE_PORT), который будет открыт только для панели [${DEFAULT_PANEL_API_PORT}]: "
+    input="${input:-${DEFAULT_PANEL_API_PORT}}"
+
+    if [[ "${input}" =~ ^[0-9]+$ ]] && (( input >= 1 && input <= 65535 )); then
+      if [[ "${input}" == "${SSH_PORT_VALUE}" ]]; then
+        reject_answer 'Порт API не должен совпадать с портом SSH.'
+        continue
+      fi
+      PANEL_API_PORT_VALUE="${input}"
+      return
+    fi
+
+    reject_answer 'Некорректный порт API. Введите число от 1 до 65535.'
   done
 }
 
@@ -587,6 +710,11 @@ configure_authorized_keys() {
   local ssh_dir="/root/.ssh"
   local auth_keys="${ssh_dir}/authorized_keys"
 
+  if [[ -z "${SSH_KEY_VALUE}" ]]; then
+    log "Ключ SSH не передан, authorized_keys не изменяется"
+    return
+  fi
+
   log "Настраивается authorized_keys пользователя root"
   install -d -m 700 "${ssh_dir}"
   touch "${auth_keys}"
@@ -600,6 +728,12 @@ configure_authorized_keys() {
   fi
 }
 
+root_has_authorized_keys() {
+  local auth_keys="/root/.ssh/authorized_keys"
+
+  [[ -s "${auth_keys}" ]] && grep -Eq '^[^#]*(ssh-ed25519|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com|ssh-rsa)[[:space:]]+[A-Za-z0-9+/=]+' "${auth_keys}"
+}
+
 configure_ssh() {
   local sshd_binary tmp_file
 
@@ -607,9 +741,19 @@ configure_ssh() {
   require_command sshd
   detect_ssh_service
 
+  # Без единого ключа вход по паролю не отключаем, иначе сервер станет
+  # недоступен по SSH.
+  if root_has_authorized_keys; then
+    log "В authorized_keys есть ключи: вход root разрешается только по ключу"
+    SSH_KEY_ONLY=1
+  else
+    SSH_KEY_ONLY=0
+    log "В authorized_keys нет ключей: вход по паролю остаётся без изменений"
+  fi
+
   cp -a "${SSHD_CONFIG}" "${SSHD_BACKUP}"
   tmp_file="$(mktemp)"
-  awk -v port="${SSH_PORT_VALUE}" '
+  awk -v port="${SSH_PORT_VALUE}" -v key_only="${SSH_KEY_ONLY}" '
     function emit_missing() {
       for (key in desired) {
         if (!(key in emitted)) {
@@ -621,10 +765,12 @@ configure_ssh() {
     BEGIN {
       desired["Port"] = port
       desired["PubkeyAuthentication"] = "yes"
-      desired["PasswordAuthentication"] = "no"
-      desired["KbdInteractiveAuthentication"] = "no"
-      desired["ChallengeResponseAuthentication"] = "no"
-      desired["PermitRootLogin"] = "prohibit-password"
+      if (key_only == 1) {
+        desired["PasswordAuthentication"] = "no"
+        desired["KbdInteractiveAuthentication"] = "no"
+        desired["ChallengeResponseAuthentication"] = "no"
+        desired["PermitRootLogin"] = "prohibit-password"
+      }
       desired["PermitEmptyPasswords"] = "no"
       desired["X11Forwarding"] = "no"
       desired["AllowTcpForwarding"] = "yes"
@@ -824,6 +970,37 @@ apply_firewall_rules() {
   netfilter-persistent save >/dev/null
 }
 
+configure_panel_access() {
+  local repo_root
+  repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+  if [[ -z "${PANEL_ADDRESS_VALUE}" ]]; then
+    log "Ограничение доступа к API ноды пропущено"
+    return
+  fi
+
+  log "Порт API ${PANEL_API_PORT_VALUE}/tcp закрывается для всех, кроме панели"
+  install -m 755 "${repo_root}/scripts/update-panel-access.sh" "${PANEL_ACCESS_SCRIPT_TARGET}"
+  install -m 644 "${repo_root}/systemd/vpn-panel-access.service" "${PANEL_ACCESS_SERVICE_TARGET}"
+  install -m 644 "${repo_root}/systemd/vpn-panel-access.timer" "${PANEL_ACCESS_TIMER_TARGET}"
+
+  {
+    printf '# Адреса панели Remnawave: IP, подсети или домены через пробел.\n'
+    printf '# Домены перепроверяются таймером vpn-panel-access.timer каждые 5 минут.\n'
+    printf 'PANEL_ADDRESS="%s"\n' "${PANEL_ADDRESS_VALUE}"
+    printf 'PANEL_API_PORT="%s"\n' "${PANEL_API_PORT_VALUE}"
+  } > "${PANEL_ACCESS_CONFIG}"
+  chmod 644 "${PANEL_ACCESS_CONFIG}"
+
+  systemctl daemon-reload
+  systemctl enable vpn-panel-access.service >/dev/null
+  systemctl enable --now vpn-panel-access.timer >/dev/null
+
+  if ! "${PANEL_ACCESS_SCRIPT_TARGET}"; then
+    log "Адреса панели получены не полностью; таймер повторит попытку через 5 минут"
+  fi
+}
+
 print_summary() {
   local network_tuning_status timer_status
 
@@ -852,6 +1029,14 @@ print_summary() {
     printf '  ограничение SYN: %s/с, всплеск %s на портах 80,443,8443\n\n' "${DEFENSE_SYN_RATE}" "${DEFENSE_SYN_BURST}"
   fi
   printf 'Состояние службы настройки сети VPN: %s\n\n' "${network_tuning_status}"
+  if [[ -n "${PANEL_ADDRESS_VALUE}" ]]; then
+    printf 'Порт API ноды %s/tcp открыт только для панели: %s\n' "${PANEL_API_PORT_VALUE}" "${PANEL_ADDRESS_VALUE}"
+    printf 'Изменить адрес: %s, затем %s\n\n' "${PANEL_ACCESS_CONFIG}" "${PANEL_ACCESS_SCRIPT_TARGET}"
+  fi
+  if [[ "${SSH_KEY_ONLY}" -ne 1 ]]; then
+    printf 'ВНИМАНИЕ: ключ SSH не добавлен, вход по паролю не отключался.\n'
+    printf 'Добавьте ключ в /root/.ssh/authorized_keys и перезапустите сценарий, чтобы оставить вход только по ключу.\n\n'
+  fi
   if [[ "${INSTALL_XANMOD_LTS}" -eq 1 ]]; then
     printf 'Запрошена установка XanMod LTS. Для активации нового ядра нужна перезагрузка.\n'
     printf 'Автоматическая перезагрузка: %s\n\n' "$([[ "${AUTO_REBOOT_AFTER_BOOTSTRAP}" -eq 1 ]] && printf 'да' || printf 'нет')"
@@ -884,6 +1069,8 @@ main() {
   ask_vpn_defense
   ask_xanmod_lts
   ask_xanmod_reboot
+  ask_panel_address
+  ask_panel_api_port
 
   configure_hostname
   configure_sysctl
@@ -904,6 +1091,7 @@ main() {
   install_traffic_guard_updater
   apply_firewall_rules
   configure_vpn_defense_firewall
+  configure_panel_access
   print_summary
   maybe_reboot
 }

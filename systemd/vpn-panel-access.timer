@@ -1,0 +1,10 @@
+[Unit]
+Description=Проверка адресов панели для доступа к API ноды
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=5min
+Unit=vpn-panel-access.service
+
+[Install]
+WantedBy=timers.target
