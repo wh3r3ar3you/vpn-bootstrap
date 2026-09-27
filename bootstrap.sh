@@ -694,18 +694,6 @@ configure_zsh() {
   fi
 }
 
-install_speedtest() {
-  if dpkg -s speedtest >/dev/null 2>&1; then
-    log "Speedtest уже установлен"
-    return
-  fi
-
-  log "Устанавливается Speedtest"
-  curl -fsSL https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh | bash
-  export DEBIAN_FRONTEND=noninteractive
-  apt-get install -y speedtest
-}
-
 configure_authorized_keys() {
   local ssh_dir="/root/.ssh"
   local auth_keys="${ssh_dir}/authorized_keys"
@@ -1086,7 +1074,6 @@ main() {
   configure_zsh
   configure_authorized_keys
   configure_ssh
-  install_speedtest
   setup_blocklists
   install_traffic_guard_updater
   apply_firewall_rules
